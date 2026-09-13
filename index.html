@@ -37,6 +37,70 @@
                 });
               } catch (_) {}
             }
+
+            // Guard against Vite HMR WebSocket connection errors in cloud container preview
+            if (window.WebSocket) {
+              var NativeWebSocket = window.WebSocket;
+              var ViteMockWebSocket = function(url, protocols) {
+                var isViteHmr =
+                  protocols === 'vite-hmr' ||
+                  protocols === 'vite-ping' ||
+                  (Array.isArray(protocols) && (protocols.indexOf('vite-hmr') !== -1 || protocols.indexOf('vite-ping') !== -1)) ||
+                  (typeof url === 'string' && (url.indexOf('24678') !== -1 || (url.indexOf('token=') !== -1 && url.indexOf('vite') !== -1)));
+
+                if (isViteHmr) {
+                  var target = new EventTarget();
+                  target.url = url;
+                  target.protocol = Array.isArray(protocols) ? protocols[0] : (protocols || '');
+                  target.readyState = 0; // CONNECTING
+                  target.bufferedAmount = 0;
+                  target.extensions = '';
+                  target.binaryType = 'blob';
+                  target.onopen = null;
+                  target.onmessage = null;
+                  target.onerror = null;
+                  target.onclose = null;
+                  target.send = function() {};
+                  target.close = function() {
+                    target.readyState = 3;
+                    var closeEv = new Event('close');
+                    target.dispatchEvent(closeEv);
+                    if (typeof target.onclose === 'function') target.onclose(closeEv);
+                  };
+                  setTimeout(function() {
+                    target.readyState = 1; // OPEN
+                    var openEv = new Event('open');
+                    target.dispatchEvent(openEv);
+                    if (typeof target.onopen === 'function') target.onopen(openEv);
+                  }, 10);
+                  return target;
+                }
+                return new NativeWebSocket(url, protocols);
+              };
+              ViteMockWebSocket.prototype = NativeWebSocket.prototype;
+              ViteMockWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
+              ViteMockWebSocket.OPEN = NativeWebSocket.OPEN;
+              ViteMockWebSocket.CLOSING = NativeWebSocket.CLOSING;
+              ViteMockWebSocket.CLOSED = NativeWebSocket.CLOSED;
+              window.WebSocket = ViteMockWebSocket;
+            }
+
+            // Suppress benign Vite HMR WebSocket console error messages
+            if (window.console && window.console.error) {
+              var nativeConsoleError = window.console.error.bind(window.console);
+              window.console.error = function() {
+                var firstArg = arguments.length > 0 ? arguments[0] : '';
+                if (
+                  typeof firstArg === 'string' &&
+                  (firstArg.indexOf('[vite] failed to connect to websocket') !== -1 ||
+                   firstArg.indexOf('WebSocket closed without opened') !== -1 ||
+                   firstArg.indexOf('vite-hmr') !== -1)
+                ) {
+                  return;
+                }
+                return nativeConsoleError.apply(window.console, arguments);
+              };
+            }
           }
         } catch (e) {
           console.warn('[Polyfill Guard] Failed to configure global property setters:', e);
