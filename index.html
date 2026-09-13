@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function() {
+        try {
+          if (typeof window !== 'undefined') {
+            if (window.fetch) {
+              var nativeFetch = window.fetch.bind(window);
+              var currentFetch = nativeFetch;
+              Object.defineProperty(window, 'fetch', {
+                get: function() {
+                  return currentFetch;
+                },
+                set: function(fn) {
+                  currentFetch = fn;
+                },
+                configurable: true,
+                enumerable: true
+              });
+            }
+            if (window.navigator && window.navigator.sendBeacon) {
+              var nativeSendBeacon = window.navigator.sendBeacon.bind(window.navigator);
+              var currentSendBeacon = nativeSendBeacon;
+              try {
+                Object.defineProperty(window.navigator, 'sendBeacon', {
+                  get: function() {
+                    return currentSendBeacon;
+                  },
+                  set: function(fn) {
+                    currentSendBeacon = fn;
+                  },
+                  configurable: true,
+                  enumerable: true
+                });
+              } catch (_) {}
+            }
+          }
+        } catch (e) {
+          console.warn('[Polyfill Guard] Failed to configure global property setters:', e);
+        }
+      })();
+    </script>
+    <title>SICU1 Incharge Nurse - ระบบบริหารยอดผู้ป่วย & ส่งต่อเวร</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <meta name="description" content="ระบบบริหารยอดผู้ป่วย & ส่งต่อเวร หออภิบาลผู้ป่วยหนักศัลยกรรม (SICU1 Shift Handover System)" />
+    <meta property="og:title" content="SICU1 Incharge Nurse" />
+    <meta property="og:description" content="ระบบบริหารยอดผู้ป่วย & ส่งต่อเวร หออภิบาลผู้ป่วยหนักศัลยกรรม (SICU1 Shift Handover System)" />
+  </head>
+  <body class="bg-[#eef2f6] text-slate-800 antialiased font-['Prompt',sans-serif]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,6 @@
+{
+  "name": "SICU1 Incharge Nurse",
+  "description": "ระบบบริหารยอดผู้ป่วย & ส่งต่อเวร หออภิบาลผู้ป่วยหนักศัลยกรรม (SICU1 Shift Handover System)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

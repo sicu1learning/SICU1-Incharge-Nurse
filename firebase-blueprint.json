@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "WardState": {
+      "title": "Ward Active State",
+      "description": "Active state for SICU ward shift, stats, handovers, and pending charts",
+      "type": "object",
+      "properties": {
+        "currentShift": { "type": "object" },
+        "patientStats": { "type": "object" },
+        "handoverItems": { "type": "array" },
+        "pendingCharts": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "ShiftsHistory": {
+      "title": "Shifts History",
+      "description": "Historical shifts log and census data",
+      "type": "object",
+      "properties": {
+        "shifts": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "WardSettings": {
+      "title": "Ward Settings",
+      "description": "Settings such as nurse lists",
+      "type": "object",
+      "properties": {
+        "nurseList": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/sicu_ward/active_state": {
+      "schema": "WardState",
+      "description": "Active shift state and real-time dashboard data"
+    },
+    "/sicu_ward/shifts_history": {
+      "schema": "ShiftsHistory",
+      "description": "Log of completed and archived shifts"
+    },
+    "/sicu_ward/settings": {
+      "schema": "WardSettings",
+      "description": "Ward configuration and nurse list"
+    }
+  }
+}
