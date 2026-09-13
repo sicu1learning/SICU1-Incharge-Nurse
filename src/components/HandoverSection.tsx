@@ -5,10 +5,11 @@ import {
   Search,
   Clock,
   User,
-  Trash2,
+  Archive,
   Edit2,
   CheckCircle2,
   X,
+  History,
 } from 'lucide-react';
 import { HandoverItem } from '../types';
 
@@ -19,6 +20,7 @@ interface HandoverSectionProps {
   onEditItem?: (id: string, updated: Partial<HandoverItem>) => void;
   onDeleteItem: (id: string) => void;
   onToggleComplete?: (id: string) => void;
+  onViewHistory?: () => void;
 }
 
 export const HandoverSection: React.FC<HandoverSectionProps> = ({
@@ -28,6 +30,7 @@ export const HandoverSection: React.FC<HandoverSectionProps> = ({
   onEditItem,
   onDeleteItem,
   onToggleComplete,
+  onViewHistory,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -114,14 +117,27 @@ export const HandoverSection: React.FC<HandoverSectionProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenAdd}
-            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#00796b] hover:bg-[#00695c] text-white text-xs font-medium transition shadow-sm cursor-pointer active:scale-95 flex-shrink-0"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>เพิ่มเรื่องส่งต่อ</span>
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {onViewHistory && (
+              <button
+                type="button"
+                onClick={onViewHistory}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition cursor-pointer active:scale-95"
+                title="ดูประวัติเรื่องส่งต่อที่ถูกเก็บถาวรทั้งหมดใน Google Sheets"
+              >
+                <History className="w-4 h-4 text-slate-600" />
+                <span>ประวัติส่งเวร</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleOpenAdd}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#00796b] hover:bg-[#00695c] text-white text-xs font-medium transition shadow-sm cursor-pointer active:scale-95"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>เพิ่มเรื่องส่งต่อ</span>
+            </button>
+          </div>
         </div>
 
         {/* Search input */}
@@ -197,11 +213,18 @@ export const HandoverSection: React.FC<HandoverSectionProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onDeleteItem(item.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                      title="ลบข้อมูล"
+                      onClick={() => {
+                        const confirmArchive = window.confirm(
+                          `ต้องการเก็บเรื่องส่งต่อ "${item.title}" เข้าสู่ 'ประวัติส่งเวร (Handover History)' หรือไม่?\n\n(ข้อมูลจะถูกย้ายไปจัดเก็บถาวรในแท็บ Handover_History บน Google Sheets ไม่สูญหาย)`
+                        );
+                        if (confirmArchive) {
+                          onDeleteItem(item.id);
+                        }
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition cursor-pointer"
+                      title="เก็บเข้าประวัติส่งเวร (Archive to Handover_History)"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Archive className="w-4 h-4" />
                     </button>
                   </div>
                 </div>

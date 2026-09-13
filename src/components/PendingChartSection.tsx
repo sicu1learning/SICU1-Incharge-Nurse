@@ -12,7 +12,15 @@ import {
   User,
 } from 'lucide-react';
 import { PendingChart, ChartLocation } from '../types';
-import { DEFAULT_DOCTORS } from '../data/initialData';
+
+const INITIAL_DOCTORS: string[] = [
+  'นพ.สมชาย เกษมศานต์',
+  'พญ.พิมพ์ใจ รัตนวิจิตร',
+  'นพ.ธีระพล วัฒนาการ',
+  'นพ.วรวิทย์ จันทรสุข',
+  'พญ.ชลธิชา บุญเรือง',
+  'นพ.กิตติพงษ์ ศรีสุวรรณ',
+];
 
 interface PendingChartSectionProps {
   charts: PendingChart[];
@@ -104,10 +112,7 @@ export const PendingChartSection: React.FC<PendingChartSectionProps> = ({
   const [editingChart, setEditingChart] = useState<PendingChart | null>(null);
 
   // Doctors management
-  const [doctorList, setDoctorList] = useState<string[]>(() => {
-    const saved = localStorage.getItem('sicu_doctor_list');
-    return saved ? JSON.parse(saved) : DEFAULT_DOCTORS;
-  });
+  const [doctorList, setDoctorList] = useState<string[]>(INITIAL_DOCTORS);
   const [selectedDoctors, setSelectedDoctors] = useState<string[]>([]);
   const [isAddingNewDoctor, setIsAddingNewDoctor] = useState(false);
   const [newDoctorInput, setNewDoctorInput] = useState('');
@@ -119,7 +124,6 @@ export const PendingChartSection: React.FC<PendingChartSectionProps> = ({
 
   const saveDoctors = (docs: string[]) => {
     setDoctorList(docs);
-    localStorage.setItem('sicu_doctor_list', JSON.stringify(docs));
   };
 
   const handleOpenAdd = () => {

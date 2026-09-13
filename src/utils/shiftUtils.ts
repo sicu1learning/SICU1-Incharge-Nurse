@@ -194,9 +194,14 @@ export function isSameThaiDate(dateA: string, dateB: string): boolean {
 
 /**
  * Finds the exact chronological previous shift in shifts history:
- * 1. Look for exact prior shift (e.g. เช้า 2/9/69 -> ดึก 2/9/69; บ่าย 2/9/69 -> เช้า 2/9/69; ดึก 3/9/69 -> บ่าย 2/9/69)
- * 2. If not found, find the most recent shift that is chronologically prior to target.
- * 3. Fallback to newest available shift.
+ * 1. ดึก 24:00–08:00 (preceding is บ่าย of yesterday)
+ * 2. เช้า 08:00–16:00 (preceding is ดึก of today)
+ * 3. บ่าย 16:00–24:00 (preceding is เช้า of today)
+ *
+ * Rules:
+ * - Carry-forward ต้องดึงจากเวรก่อนหน้าตามลำดับเวลาเท่านั้น
+ * - ห้ามดึงข้อมูลจากเวรที่ไม่เกี่ยวข้อง
+ * - ห้ามใช้ข้อมูลจากวันที่อื่นเป็นค่าเริ่มต้น
  */
 export function findPreviousShiftInList(
   shifts: ShiftInfo[],
@@ -212,25 +217,14 @@ export function findPreviousShiftInList(
   // 1. Calculate exact chronological previous shift
   const { prevType, prevDate } = getPreviousShift(targetType, targetDate);
 
-  // 2. Search for exact match
+  // 2. Search for exact chronological match only
   const exactMatch = filtered.find(
     (s) => s.shiftType === prevType && isSameThaiDate(s.date, prevDate)
   );
   if (exactMatch) return exactMatch;
 
-  // 3. Find newest shift that is chronologically before target
-  const targetObj = { date: targetDate, shiftType: targetType };
-  const sorted = [...filtered].sort(compareShiftsDesc);
-
-  const olderShifts = sorted.filter(
-    (s) => compareShiftsDesc(targetObj, s) > 0
-  );
-  if (olderShifts.length > 0) {
-    return olderShifts[0];
-  }
-
-  // 4. Fallback to the latest available shift in list
-  return sorted[0] || null;
+  // Do NOT fallback to random or unrelated dates/shifts
+  return null;
 }
 
 /**
@@ -272,13 +266,26 @@ export function createCurrentLiveShift(latestHistoryShift?: ShiftInfo): ShiftInf
   const shiftSlug = shiftType === 'เวรดึก' ? 'night' : shiftType === 'เวรเช้า' ? 'morning' : 'afternoon';
   const id = `shift-${shiftSlug}-${date.replace(/\//g, '-')}`;
 
-  const prevInfo = latestHistoryShift
-    ? `${latestHistoryShift.shiftType} (${latestHistoryShift.date})`
-    : `${getPreviousShift(shiftType, date).prevType} (${getPreviousShift(shiftType, date).prevDate})`;
+  const prev = getPreviousShift(shiftType, date);
+  const isPreceding = Boolean(
+    latestHistoryShift &&
+    latestHistoryShift.shiftType === prev.prevType &&
+    isSameThaiDate(latestHistoryShift.date, prev.prevDate)
+  );
 
-  const carriedOver = latestHistoryShift?.stats?.currentRemaining ?? 0;
-  const cat5 = latestHistoryShift?.stats?.category5Count ?? 0;
-  const cat4 = latestHistoryShift?.stats?.category4Count ?? 0;
+  const prevInfo = isPreceding && latestHistoryShift
+    ? `${latestHistoryShift.shiftType} (${latestHistoryShift.date})`
+    : `${prev.prevType} (${prev.prevDate})`;
+
+  const carriedOver = isPreceding && latestHistoryShift?.stats?.currentRemaining !== undefined
+    ? latestHistoryShift.stats.currentRemaining
+    : 0;
+  const cat5 = isPreceding && latestHistoryShift?.stats?.category5Count !== undefined
+    ? latestHistoryShift.stats.category5Count
+    : 0;
+  const cat4 = isPreceding && latestHistoryShift?.stats?.category4Count !== undefined
+    ? latestHistoryShift.stats.category4Count
+    : 0;
 
   return {
     id,

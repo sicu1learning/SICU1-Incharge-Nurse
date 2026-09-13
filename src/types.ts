@@ -193,3 +193,28 @@ export interface PendingChart {
   status: 'pending' | 'completed' | 'resolved';
 }
 
+export type ValuableItemStatus = 'stored' | 'returned' | 'transferred' | 'active';
+
+export interface ValuableItem {
+  id: string;
+  patientName: string;
+  hn?: string;
+  bedNumber?: string;
+  itemDescription: string;
+  custodian: string; // ผู้รับฝาก/ผู้บันทึก
+  receiver?: string; // ผู้รับมอบ/ส่งคืน
+  status: ValuableItemStatus; // 'stored' | 'returned' | 'transferred' | 'active'
+  dateAdded: string;
+  notes?: string;
+  shiftId?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface HandoverHistoryItem extends HandoverItem {
+  source_handover_id: string;
+  archivedAt: string;
+  archivedBy?: string;
+  archiveReason?: string;
+}
+

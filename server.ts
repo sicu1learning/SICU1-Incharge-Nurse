@@ -34,6 +34,16 @@ app.get('/api/health', (req, res) => {
 });
 
 // -------------------------------------------------------------
+// Google Apps Script Proxy Status Endpoint
+// -------------------------------------------------------------
+app.get('/api/gas/status', (req, res) => {
+  res.json({
+    configured: Boolean(process.env.GOOGLE_APPS_SCRIPT_URL),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// -------------------------------------------------------------
 // Google Apps Script Proxy Endpoint
 // Proxies requests to Google Apps Script Web App to eliminate
 // any browser CORS, redirect, or mixed-content issues across all devices.
@@ -49,11 +59,27 @@ app.all('/api/gas', async (req, res) => {
     if (!targetUrl || !targetUrl.startsWith('http')) {
       return res.status(400).json({
         success: false,
-        error: 'Missing or invalid Google Apps Script Web App URL',
+        error: 'Missing or invalid Google Apps Script Web App URL (กรุณาระบุ GOOGLE_APPS_SCRIPT_URL ใน environment variable หรือตั้งค่าในแอป)',
       });
     }
 
     const method = req.method.toUpperCase();
+    let finalFetchUrl = targetUrl;
+
+    if (method === 'GET') {
+      try {
+        const parsedUrl = new URL(targetUrl);
+        for (const [key, val] of Object.entries(req.query)) {
+          if (key !== 'url' && val !== undefined) {
+            parsedUrl.searchParams.set(key, String(val));
+          }
+        }
+        finalFetchUrl = parsedUrl.toString();
+      } catch {
+        finalFetchUrl = targetUrl;
+      }
+    }
+
     const headers: Record<string, string> = {
       'Accept': 'application/json',
     };
@@ -65,11 +91,11 @@ app.all('/api/gas', async (req, res) => {
     };
 
     if (method === 'POST') {
-      headers['Content-Type'] = 'application/json';
+      headers['Content-Type'] = 'text/plain;charset=utf-8';
       fetchOptions.body = JSON.stringify(req.body);
     }
 
-    const response = await fetch(targetUrl, fetchOptions);
+    const response = await fetch(finalFetchUrl, fetchOptions);
     const contentType = response.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {

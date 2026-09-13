@@ -1,10 +1,9 @@
 import React from 'react';
 import { Moon, Sun, Sunset, User, History, Edit3, Clock } from 'lucide-react';
 import { ShiftInfo } from '../types';
-import { INITIAL_SHIFT } from '../data/initialData';
 
 interface HeroShiftBannerProps {
-  shift: ShiftInfo;
+  shift?: ShiftInfo | null;
   onOpenHistory: () => void;
   onOpenEditShift?: () => void;
 }
@@ -14,7 +13,12 @@ export const HeroShiftBanner: React.FC<HeroShiftBannerProps> = ({
   onOpenHistory,
   onOpenEditShift,
 }) => {
-  const safeShift: ShiftInfo = shift || INITIAL_SHIFT;
+  const safeShift = shift || {
+    id: 'current-shift',
+    date: 'วันนี้',
+    shiftType: 'เวรเช้า' as const,
+    inchargeName: '-',
+  };
 
   const getShiftIcon = (type: string) => {
     switch (type) {

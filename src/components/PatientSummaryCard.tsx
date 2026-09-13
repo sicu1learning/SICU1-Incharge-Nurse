@@ -13,11 +13,10 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { PatientStats, ShiftInfo } from '../types';
-import { INITIAL_SHIFT } from '../data/initialData';
 
 interface PatientSummaryCardProps {
   stats: PatientStats;
-  shift: ShiftInfo;
+  shift?: ShiftInfo | null;
   onUpdateStats?: (newStats: PatientStats) => void;
   onOpenEditShift?: () => void;
 }
@@ -45,7 +44,12 @@ export const PatientSummaryCard: React.FC<PatientSummaryCardProps> = ({
     postOpCount: stats?.postOpCount ?? 0,
   };
 
-  const safeShift: ShiftInfo = shift || INITIAL_SHIFT;
+  const safeShift = shift || {
+    id: 'current-shift',
+    date: 'วันนี้',
+    shiftType: 'เวรเช้า' as const,
+    inchargeName: '-',
+  };
 
   return (
     <div className="w-full bg-white rounded-2xl p-5 md:p-6 shadow-sm border border-slate-200/80">
