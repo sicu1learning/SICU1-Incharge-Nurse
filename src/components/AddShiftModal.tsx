@@ -48,7 +48,7 @@ interface AddShiftModalProps {
 }
 
 export const DEFAULT_NURSES: string[] = [
-  'นัฐภร จันทร์ฟ้าเลื่อม',
+  'นัฐกร จันทร์ฟ้าเลื่อม',
   'ธิดาพร เท้งสี',
   'ชมพูนุท เล็งสาย',
   'สุพรรณษา คุ้มครอง',
@@ -57,7 +57,7 @@ export const DEFAULT_NURSES: string[] = [
   'จุฑารัตน์ คุณานุศาสน์',
   'สุรีรัตน์ ชาสมบัติ',
   'ปิยพร ธีรศิลป์',
-  'สัจจพร งามยิ่งยวด',
+  'สัจจพร งามยิ่งยศ',
 ];
 
 export const AddShiftModal: React.FC<AddShiftModalProps> = ({
@@ -89,17 +89,13 @@ export const AddShiftModal: React.FC<AddShiftModalProps> = ({
     return findPreviousShiftInList(allShifts, date, shiftType);
   }, [allShifts, date, shiftType]);
 
-  // Nurse list state
-  const [nurseList, setNurseList] = useState<string[]>(() => {
-    const saved = localStorage.getItem('sicu_nurse_list');
-    return saved ? JSON.parse(saved) : DEFAULT_NURSES;
-  });
+  // Nurse list state (synced with Google Sheets via wardDataService)
+  const [nurseList, setNurseList] = useState<string[]>(DEFAULT_NURSES);
 
   useEffect(() => {
     const unsubscribe = subscribeNurseList((cloudNurses) => {
       if (cloudNurses && cloudNurses.length > 0) {
         setNurseList(cloudNurses);
-        localStorage.setItem('sicu_nurse_list', JSON.stringify(cloudNurses));
       }
     });
     return () => unsubscribe();
@@ -431,8 +427,7 @@ export const AddShiftModal: React.FC<AddShiftModalProps> = ({
     if (!nurseList.includes(name)) {
       const updated = [...nurseList, name];
       setNurseList(updated);
-      localStorage.setItem('sicu_nurse_list', JSON.stringify(updated));
-      syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to cloud:', err));
+      syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to Google Sheets:', err));
       setInchargeName(name);
       setNurseError(false);
     }
@@ -444,8 +439,7 @@ export const AddShiftModal: React.FC<AddShiftModalProps> = ({
     e.stopPropagation();
     const updated = nurseList.filter((n) => n !== nameToDelete);
     setNurseList(updated);
-    localStorage.setItem('sicu_nurse_list', JSON.stringify(updated));
-    syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to cloud:', err));
+    syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to Google Sheets:', err));
     if (inchargeName === nameToDelete) {
       setInchargeName('');
     }

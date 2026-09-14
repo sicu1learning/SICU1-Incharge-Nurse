@@ -129,13 +129,13 @@ export interface ShiftInfo {
   date: string; // e.g. "22/08/2569"
   shiftType: ShiftType;
   inchargeName: string;
-  previousShiftInfo: string; // e.g. "เวรบ่าย 21/08/2569"
-  isActive: boolean;
-  createdAt: string;
+  previousShiftInfo?: string; // e.g. "เวรบ่าย 21/08/2569"
+  isActive?: boolean;
+  createdAt?: string;
   updatedAt?: string;
-  stats: PatientStats;
-  handoverItems: HandoverItem[];
-  pendingCharts: PendingChart[];
+  stats?: PatientStats;
+  handoverItems?: HandoverItem[];
+  pendingCharts?: PendingChart[];
   movementNotes?: string[]; // backward compatibility
   movementRecords?: MovementRecord[]; // ข้อมูล ย้าย/รับ/จำหน่าย เพิ่มเติม (-ชื่อ/สกุล -Dx. -สถานะ(รับ/ย้าย จาก..))
   consultationData?: ConsultationData; // ยอด consulttation

@@ -33,7 +33,7 @@ var SHEET_NAMES = {
 };
 
 var DEFAULT_NURSES = [
-  'นัฐภร จันทร์ฟ้าเลื่อม',
+  'นัฐกร จันทร์ฟ้าเลื่อม',
   'ธิดาพร เท้งสี',
   'ชมพูนุท เล็งสาย',
   'สุพรรณษา คุ้มครอง',
@@ -42,7 +42,7 @@ var DEFAULT_NURSES = [
   'จุฑารัตน์ คุณานุศาสน์',
   'สุรีรัตน์ ชาสมบัติ',
   'ปิยพร ธีรศิลป์',
-  'สัจจพร งามยิ่งยวด'
+  'สัจจพร งามยิ่งยศ'
 ];
 
 /**
@@ -133,6 +133,8 @@ function doPost(e) {
       result = handleSaveHandoverItem(payload);
     } else if (action === 'archiveHandoverItem') {
       result = handleArchiveHandoverItem(payload);
+    } else if (action === 'deleteHandoverItem') {
+      result = handleDeleteHandoverItem(payload);
     } else if (action === 'deleteShift') {
       result = handleDeleteShift(payload);
     } else if (action === 'deleteValuableItem') {
@@ -704,6 +706,31 @@ function handleArchiveHandoverItem(payload) {
     source_handover_id: id,
     archiveId: archiveId
   };
+}
+
+/**
+ * Delete Handover Item directly from Handover_Items sheet
+ */
+function handleDeleteHandoverItem(payload) {
+  var id = payload.id || (payload.item && payload.item.id);
+  if (!id) {
+    return { success: false, error: 'Missing handover item id' };
+  }
+  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_ITEMS, [
+    'id', 'title', 'details', 'patientName', 'bedNumber',
+    'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted'
+  ]);
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(id)) {
+        sheet.deleteRow(i + 2);
+        return { success: true, message: 'Handover item deleted' };
+      }
+    }
+  }
+  return { success: true, message: 'Item not found or already deleted' };
 }
 
 /**

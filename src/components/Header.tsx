@@ -4,7 +4,7 @@ import {
   subscribeGasStatus,
   GasConnectionStatus,
   getStoredGasUrl,
-} from '../services/googleAppsScriptService';
+} from '../services/googleSheets';
 
 interface HeaderProps {
   onOpenDashboard: () => void;

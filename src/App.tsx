@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { ShiftInfo, PatientStats, HandoverItem, PendingChart } from './types';
 import {
-  INITIAL_SHIFT,
-  INITIAL_PATIENT_STATS,
-  INITIAL_HANDOVER_ITEMS,
-  INITIAL_PENDING_CHARTS,
-} from './data/initialData';
+  ShiftInfo,
+  PatientStats,
+  HandoverItem,
+  HandoverHistoryItem,
+  PendingChart,
+} from './types';
 import { Header } from './components/Header';
 import { HeroShiftBanner } from './components/HeroShiftBanner';
 import { PatientSummaryCard } from './components/PatientSummaryCard';
 import { QuickSummaryCards } from './components/QuickSummaryCards';
 import { HandoverSection } from './components/HandoverSection';
 import { PendingChartSection } from './components/PendingChartSection';
+import { HandoverHistoryModal } from './components/HandoverHistoryModal';
 import { AddShiftModal } from './components/AddShiftModal';
 import { EditShiftModal } from './components/EditShiftModal';
 import { HandoverLogsView } from './components/HandoverLogsView';
@@ -20,27 +21,40 @@ import { GoogleAppsScriptModal } from './components/GoogleAppsScriptModal';
 import {
   initializeWardData,
   subscribeWardState,
-  subscribeShiftsHistory,
   syncWardStateToCloud,
-  syncShiftsHistoryToCloud,
-  syncPatientStats,
   saveShiftToGoogleSheets,
   deleteShiftFromGoogleSheets,
-  saveHandoversToGoogleSheets,
-  savePendingChartsToGoogleSheets,
+  saveHandoverToGoogleSheets,
+  archiveHandoverInGoogleSheets,
+  deleteHandoverFromGoogleSheets,
+  savePendingChartToGoogleSheets,
+  resolvePendingChartInGoogleSheets,
+  deletePendingChartFromGoogleSheets,
   refreshFromGoogleSheets,
   sanitizeShiftEquipmentData,
   sanitizeShiftsList,
-  isDummyHandoverItem,
-  isDummyPendingChart,
-  isMockShift,
 } from './services/wardDataService';
 import {
   subscribeGasStatus,
   GasConnectionStatus,
-  getStoredGasUrl,
-} from './services/googleAppsScriptService';
-import { AlertCircle, FileSpreadsheet, RefreshCw } from 'lucide-react';
+  getCustomGasUrl,
+} from './services/googleSheets';
+import { AlertCircle, FileSpreadsheet, RefreshCw, Loader2, ShieldCheck } from 'lucide-react';
+
+const EMPTY_PATIENT_STATS: PatientStats = {
+  carriedOver: 0,
+  transferredIn: 0,
+  admittedNew: 0,
+  transferredOut: 0,
+  againstAdvice: 0,
+  deceased: 0,
+  deceasedPostOp24Hr: 0,
+  admitDischarge24Hr: 0,
+  referOut: 0,
+  currentRemaining: 0,
+  category5Count: 0,
+  category4Count: 0,
+};
 
 export default function App() {
   // Navigation view mode (UI state only)
@@ -48,27 +62,29 @@ export default function App() {
 
   // Google Apps Script Connection Status
   const [gasStatus, setGasStatus] = useState<GasConnectionStatus>({
-    state: getStoredGasUrl() ? 'connecting' : 'not_configured',
+    state: getCustomGasUrl() ? 'connecting' : 'connected',
   });
 
-  // Ward Data States (Clean in-memory, single source of truth is Google Sheets)
-  const [currentShift, setCurrentShift] = useState<ShiftInfo>(() =>
-    sanitizeShiftEquipmentData(INITIAL_SHIFT)
-  );
+  // Ward Data States (Pure Google Sheets is the only source of truth - No mock data)
+  const [currentShift, setCurrentShift] = useState<ShiftInfo | null>(null);
   const [shiftsHistory, setShiftsHistory] = useState<ShiftInfo[]>([]);
-  const [patientStats, setPatientStats] = useState<PatientStats>(
-    () => INITIAL_SHIFT.stats || INITIAL_PATIENT_STATS
-  );
-  const [handoverItems, setHandoverItems] = useState<HandoverItem[]>(INITIAL_HANDOVER_ITEMS);
-  const [pendingCharts, setPendingCharts] = useState<PendingChart[]>(INITIAL_PENDING_CHARTS);
+  const [patientStats, setPatientStats] = useState<PatientStats>(EMPTY_PATIENT_STATS);
+  const [handoverItems, setHandoverItems] = useState<HandoverItem[]>([]);
+  const [handoverHistory, setHandoverHistory] = useState<HandoverHistoryItem[]>([]);
+  const [pendingCharts, setPendingCharts] = useState<PendingChart[]>([]);
+
+  // Loading & Error States
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   // Modals state
   const [isAddShiftOpen, setIsAddShiftOpen] = useState(false);
   const [isEditActiveShiftOpen, setIsEditActiveShiftOpen] = useState(false);
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
   const [isGoogleSheetsModalOpen, setIsGoogleSheetsModalOpen] = useState(false);
+  const [isHandoverHistoryOpen, setIsHandoverHistoryOpen] = useState(false);
 
-  // Subscribe to Google Apps Script status
+  // Subscribe to Google Apps Script connection status
   useEffect(() => {
     const unsub = subscribeGasStatus((status) => setGasStatus(status));
     return unsub;
@@ -78,36 +94,27 @@ export default function App() {
   useEffect(() => {
     initializeWardData();
 
-    // Subscribe to active ward state (live shift, stats, handovers, pending charts)
+    // Subscribe to all ward data updates directly from Google Sheets
     const unsubscribeWard = subscribeWardState((sheetState) => {
-      if (sheetState.currentShift && sheetState.currentShift.id && !isMockShift(sheetState.currentShift)) {
+      setIsLoading(sheetState.isLoading);
+      setErrorMessage(sheetState.error);
+
+      if (sheetState.currentShift) {
         setCurrentShift(sheetState.currentShift);
       }
       if (sheetState.patientStats) {
         setPatientStats(sheetState.patientStats);
+      } else if (sheetState.currentShift?.stats) {
+        setPatientStats(sheetState.currentShift.stats);
       }
-      if (Array.isArray(sheetState.handoverItems)) {
-        const cleaned = sheetState.handoverItems.filter((i) => !isDummyHandoverItem(i));
-        setHandoverItems(cleaned);
-      }
-      if (Array.isArray(sheetState.pendingCharts)) {
-        const cleaned = sheetState.pendingCharts.filter((c) => !isDummyPendingChart(c));
-        setPendingCharts(cleaned);
-      }
-    });
-
-    // Subscribe to shifts history logs
-    const unsubscribeHistory = subscribeShiftsHistory((sheetShifts) => {
-      if (sheetShifts && Array.isArray(sheetShifts)) {
-        const realShifts = sheetShifts.filter((s) => !isMockShift(s));
-        const { shifts: sanitized } = sanitizeShiftsList(realShifts);
-        setShiftsHistory(sanitized);
-      }
+      setHandoverItems(sheetState.handoverItems || []);
+      setHandoverHistory(sheetState.handoverHistory || []);
+      setPendingCharts(sheetState.pendingCharts || []);
+      setShiftsHistory(sheetState.shiftsHistory || []);
     });
 
     return () => {
       unsubscribeWard();
-      unsubscribeHistory();
     };
   }, []);
 
@@ -124,6 +131,8 @@ export default function App() {
   // Handlers
   const handleUpdateStats = (newStats: PatientStats) => {
     setPatientStats(newStats);
+    if (!currentShift) return;
+
     const updatedShift: ShiftInfo = {
       ...currentShift,
       stats: newStats,
@@ -132,13 +141,15 @@ export default function App() {
     setCurrentShift(updatedShift);
 
     // Save directly to Google Sheets via Google Apps Script API
-    syncPatientStats(newStats, updatedShift).catch((err) =>
+    syncWardStateToCloud(updatedShift, newStats).catch((err) =>
       console.warn('Failed to save stats to Google Sheets:', err)
     );
   };
 
   const handleAddShift = (newShift: ShiftInfo) => {
-    const currentShiftInHistory = shiftsHistory.find((s) => s.id === currentShift.id);
+    const currentShiftInHistory = currentShift
+      ? shiftsHistory.find((s) => s.id === currentShift.id)
+      : null;
 
     const combinedHandovers = [
       ...handoverItems,
@@ -154,13 +165,15 @@ export default function App() {
       ) || []),
     ];
 
-    const completedCurrentShift: ShiftInfo = sanitizeShiftEquipmentData({
-      ...currentShift,
-      stats: patientStats,
-      handoverItems: combinedHandovers,
-      pendingCharts: combinedCharts,
-      isActive: false,
-    });
+    const completedCurrentShift: ShiftInfo | null = currentShift
+      ? sanitizeShiftEquipmentData({
+          ...currentShift,
+          stats: patientStats,
+          handoverItems: combinedHandovers,
+          pendingCharts: combinedCharts,
+          isActive: false,
+        })
+      : null;
 
     const finalHandovers =
       newShift.handoverItems && newShift.handoverItems.length > 0
@@ -179,11 +192,15 @@ export default function App() {
       isActive: true,
     });
 
-    const newShiftsList = [
-      updatedNewShift,
-      completedCurrentShift,
-      ...shiftsHistory.filter((s) => s.id !== currentShift.id && s.id !== newShift.id),
-    ];
+    const newShiftsList = completedCurrentShift
+      ? [
+          updatedNewShift,
+          completedCurrentShift,
+          ...shiftsHistory.filter(
+            (s) => s.id !== currentShift?.id && s.id !== newShift.id
+          ),
+        ]
+      : [updatedNewShift, ...shiftsHistory.filter((s) => s.id !== newShift.id)];
 
     setShiftsHistory(newShiftsList);
     setCurrentShift(updatedNewShift);
@@ -192,17 +209,16 @@ export default function App() {
     setPendingCharts(carriedCharts);
     setIsAddShiftOpen(false);
 
-    // Persist to Google Sheets via Google Apps Script API
-    syncWardStateToCloud({
-      currentShift: updatedNewShift,
-      patientStats: newShift.stats,
-      handoverItems: finalHandovers,
-      pendingCharts: carriedCharts,
-    }).catch((err) => console.warn('Failed to sync state to Google Sheets:', err));
-
-    saveShiftToGoogleSheets(completedCurrentShift).catch((err) =>
-      console.warn('Failed to archive shift to Google Sheets:', err)
+    // Persist to Google Sheets Active_Shift & Shifts_History
+    syncWardStateToCloud(updatedNewShift, newShift.stats).catch((err) =>
+      console.warn('Failed to sync state to Google Sheets:', err)
     );
+
+    if (completedCurrentShift) {
+      saveShiftToGoogleSheets(completedCurrentShift).catch((err) =>
+        console.warn('Failed to archive shift to Google Sheets:', err)
+      );
+    }
     saveShiftToGoogleSheets(updatedNewShift).catch((err) =>
       console.warn('Failed to save new shift to Google Sheets:', err)
     );
@@ -212,25 +228,20 @@ export default function App() {
     const updatedHistory = shiftsHistory.filter((s) => s.id !== shiftId);
     setShiftsHistory(updatedHistory);
 
-    // Delete from Google Sheets
     deleteShiftFromGoogleSheets(shiftId).catch((err) =>
       console.warn('Failed to delete shift from Google Sheets:', err)
     );
 
-    // If the active current shift was deleted, update currentShift to the newest remaining shift
-    if (currentShift.id === shiftId && updatedHistory.length > 0) {
+    if (currentShift?.id === shiftId && updatedHistory.length > 0) {
       const nextShift = updatedHistory[0];
       setCurrentShift(nextShift);
       if (nextShift.stats) setPatientStats(nextShift.stats);
       if (nextShift.handoverItems) setHandoverItems(nextShift.handoverItems);
       if (nextShift.pendingCharts) setPendingCharts(nextShift.pendingCharts);
 
-      syncWardStateToCloud({
-        currentShift: nextShift,
-        patientStats: nextShift.stats || patientStats,
-        handoverItems: nextShift.handoverItems || [],
-        pendingCharts: nextShift.pendingCharts || [],
-      }).catch((err) => console.warn('Failed to sync next shift to Google Sheets:', err));
+      syncWardStateToCloud(nextShift, nextShift.stats).catch((err) =>
+        console.warn('Failed to sync next shift to Google Sheets:', err)
+      );
     }
   };
 
@@ -250,12 +261,9 @@ export default function App() {
     if (selected.handoverItems) setHandoverItems(selected.handoverItems);
     if (selected.pendingCharts) setPendingCharts(selected.pendingCharts);
 
-    syncWardStateToCloud({
-      currentShift: updatedActive,
-      patientStats: selected.stats || patientStats,
-      handoverItems: selected.handoverItems || handoverItems,
-      pendingCharts: selected.pendingCharts || pendingCharts,
-    }).catch((err) => console.warn('Failed to sync active shift to Google Sheets:', err));
+    syncWardStateToCloud(updatedActive, selected.stats).catch((err) =>
+      console.warn('Failed to sync active shift to Google Sheets:', err)
+    );
 
     saveShiftToGoogleSheets(updatedActive).catch((err) =>
       console.warn('Failed to save active shift to Google Sheets:', err)
@@ -267,7 +275,7 @@ export default function App() {
   const handleEditShift = (rawUpdatedShift: ShiftInfo) => {
     const updatedShift = sanitizeShiftEquipmentData(rawUpdatedShift);
     const isTargetActive =
-      currentShift.id === updatedShift.id ||
+      currentShift?.id === updatedShift.id ||
       Boolean(updatedShift.isActive) ||
       shiftsHistory.length === 0 ||
       shiftsHistory[0]?.id === updatedShift.id;
@@ -275,13 +283,14 @@ export default function App() {
     const existsInHistory = shiftsHistory.some((s) => s.id === updatedShift.id);
     const updatedHistory = existsInHistory
       ? shiftsHistory.map((s) =>
-          s.id === updatedShift.id ? { ...updatedShift, isActive: isTargetActive ? true : s.isActive } : s
+          s.id === updatedShift.id
+            ? { ...updatedShift, isActive: isTargetActive ? true : s.isActive }
+            : s
         )
       : [{ ...updatedShift, isActive: isTargetActive }, ...shiftsHistory];
 
     setShiftsHistory(updatedHistory);
 
-    // Save to Google Sheets
     saveShiftToGoogleSheets(updatedShift).catch((err) =>
       console.warn('Failed to save edited shift to Google Sheets:', err)
     );
@@ -292,62 +301,40 @@ export default function App() {
       if (updatedShift.stats) {
         setPatientStats(updatedShift.stats);
       }
-      syncWardStateToCloud({
-        currentShift: activeShift,
-        patientStats: updatedShift.stats || patientStats,
-      }).catch((err) => console.warn('Failed to sync updated active shift to Google Sheets:', err));
+      syncWardStateToCloud(activeShift, updatedShift.stats).catch((err) =>
+        console.warn('Failed to sync updated active shift to Google Sheets:', err)
+      );
     }
   };
 
+  // Handover Operations
   const handleAddHandover = (itemData: Omit<HandoverItem, 'id' | 'createdAt'>) => {
     const newItem: HandoverItem = {
       ...itemData,
       id: 'ho-' + Date.now(),
       createdAt: new Date().toISOString(),
-      shiftId: currentShift.id,
+      shiftId: currentShift?.id || 'shift-live',
     };
     const updatedHandovers = [newItem, ...handoverItems];
     setHandoverItems(updatedHandovers);
 
-    const updatedHistory = shiftsHistory.map((s) => {
-      if (s.id === currentShift.id) {
-        const list = s.handoverItems || [];
-        return {
-          ...s,
-          handoverItems: [newItem, ...list.filter((h) => h.id !== newItem.id)],
-        };
-      }
-      return s;
-    });
-    setShiftsHistory(updatedHistory);
-
-    // Save to Google Sheets via Google Apps Script
-    saveHandoversToGoogleSheets(updatedHandovers).catch((err) =>
-      console.warn('Failed to save handovers to Google Sheets:', err)
+    saveHandoverToGoogleSheets(newItem).catch((err) =>
+      console.warn('Failed to save handover to Google Sheets:', err)
     );
   };
 
   const handleEditHandover = (id: string, updated: Partial<HandoverItem>) => {
+    const target = handoverItems.find((i) => i.id === id);
+    if (!target) return;
+    const updatedItem = { ...target, ...updated };
+
     const updatedHandovers = handoverItems.map((item) =>
-      item.id === id ? { ...item, ...updated } : item
+      item.id === id ? updatedItem : item
     );
     setHandoverItems(updatedHandovers);
 
-    const updatedHistory = shiftsHistory.map((s) => {
-      if (s.id === currentShift.id && s.handoverItems) {
-        return {
-          ...s,
-          handoverItems: s.handoverItems.map((item) =>
-            item.id === id ? { ...item, ...updated } : item
-          ),
-        };
-      }
-      return s;
-    });
-    setShiftsHistory(updatedHistory);
-
-    saveHandoversToGoogleSheets(updatedHandovers).catch((err) =>
-      console.warn('Failed to save handovers to Google Sheets:', err)
+    saveHandoverToGoogleSheets(updatedItem).catch((err) =>
+      console.warn('Failed to save handover to Google Sheets:', err)
     );
   };
 
@@ -355,68 +342,60 @@ export default function App() {
     const updatedHandovers = handoverItems.filter((item) => item.id !== id);
     setHandoverItems(updatedHandovers);
 
-    const updatedHistory = shiftsHistory.map((s) => {
-      if (s.id === currentShift.id && s.handoverItems) {
-        return {
-          ...s,
-          handoverItems: s.handoverItems.filter((item) => item.id !== id),
-        };
-      }
-      return s;
-    });
-    setShiftsHistory(updatedHistory);
-
-    saveHandoversToGoogleSheets(updatedHandovers).catch((err) =>
+    deleteHandoverFromGoogleSheets(id).catch((err) =>
       console.warn('Failed to delete handover from Google Sheets:', err)
     );
   };
 
   const handleToggleCompleteHandover = (id: string) => {
-    const updatedHandovers = handoverItems.map((item) =>
-      item.id === id ? { ...item, isCompleted: !item.isCompleted } : item
-    );
-    setHandoverItems(updatedHandovers);
+    const target = handoverItems.find((i) => i.id === id);
+    if (!target) return;
+    const isNowCompleted = !target.isCompleted;
 
-    saveHandoversToGoogleSheets(updatedHandovers).catch((err) =>
-      console.warn('Failed to update handover in Google Sheets:', err)
-    );
+    if (isNowCompleted) {
+      // Archive to Handover_History
+      archiveHandoverInGoogleSheets(
+        id,
+        currentShift?.inchargeName || 'In-Charge',
+        'ส่งต่อข้อมูลเรียบร้อยแล้ว'
+      ).catch((err) => console.warn('Failed to archive handover:', err));
+    } else {
+      const updatedItem = { ...target, isCompleted: false };
+      setHandoverItems(handoverItems.map((i) => (i.id === id ? updatedItem : i)));
+      saveHandoverToGoogleSheets(updatedItem).catch((err) =>
+        console.warn('Failed to update handover in Google Sheets:', err)
+      );
+    }
   };
 
+  // Pending Chart Operations
   const handleAddPendingChart = (chartData: Omit<PendingChart, 'id' | 'daysPending'>) => {
     const newChart: PendingChart = {
       ...chartData,
       id: 'chart-' + Date.now(),
       daysPending: 1,
-      shiftId: currentShift.id,
+      shiftId: currentShift?.id || 'shift-live',
       status: 'pending',
     };
     const updatedCharts = [newChart, ...pendingCharts];
     setPendingCharts(updatedCharts);
 
-    const updatedHistory = shiftsHistory.map((s) => {
-      if (s.id === currentShift.id) {
-        const list = s.pendingCharts || [];
-        return {
-          ...s,
-          pendingCharts: [newChart, ...list.filter((c) => c.id !== newChart.id)],
-        };
-      }
-      return s;
-    });
-    setShiftsHistory(updatedHistory);
-
-    savePendingChartsToGoogleSheets(updatedCharts).catch((err) =>
+    savePendingChartToGoogleSheets(newChart).catch((err) =>
       console.warn('Failed to save pending chart to Google Sheets:', err)
     );
   };
 
   const handleEditPendingChart = (id: string, updated: Partial<PendingChart>) => {
+    const target = pendingCharts.find((c) => c.id === id);
+    if (!target) return;
+    const updatedChart = { ...target, ...updated };
+
     const updatedCharts = pendingCharts.map((chart) =>
-      chart.id === id ? { ...chart, ...updated } : chart
+      chart.id === id ? updatedChart : chart
     );
     setPendingCharts(updatedCharts);
 
-    savePendingChartsToGoogleSheets(updatedCharts).catch((err) =>
+    savePendingChartToGoogleSheets(updatedChart).catch((err) =>
       console.warn('Failed to update pending chart in Google Sheets:', err)
     );
   };
@@ -425,7 +404,7 @@ export default function App() {
     const updatedCharts = pendingCharts.filter((chart) => chart.id !== id);
     setPendingCharts(updatedCharts);
 
-    savePendingChartsToGoogleSheets(updatedCharts).catch((err) =>
+    deletePendingChartFromGoogleSheets(id).catch((err) =>
       console.warn('Failed to delete pending chart from Google Sheets:', err)
     );
   };
@@ -434,7 +413,7 @@ export default function App() {
     const updatedCharts = pendingCharts.filter((chart) => chart.id !== id);
     setPendingCharts(updatedCharts);
 
-    savePendingChartsToGoogleSheets(updatedCharts).catch((err) =>
+    resolvePendingChartInGoogleSheets(id).catch((err) =>
       console.warn('Failed to resolve pending chart in Google Sheets:', err)
     );
   };
@@ -453,6 +432,15 @@ export default function App() {
     }
   };
 
+  // Fallback safe shift representation when waiting for Google Sheets initial load
+  const displayShift: ShiftInfo = currentShift || {
+    id: 'loading-shift',
+    date: new Date().toLocaleDateString('th-TH'),
+    shiftType: 'เวรเช้า',
+    inchargeName: 'กำลังโหลดข้อมูล...',
+    stats: patientStats,
+  };
+
   return (
     <div className="min-h-screen bg-[#eef2f6] text-slate-800 flex flex-col font-['Prompt',sans-serif]">
       {/* Top Header with Live Online Indicator */}
@@ -464,33 +452,16 @@ export default function App() {
 
       {/* Main Content Dashboard Container */}
       <main className="w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-5 md:py-6 space-y-5 md:space-y-6 flex-1">
-        {/* Google Sheets Connection Alert / Setup Banner */}
-        {gasStatus.state === 'not_configured' && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0 text-amber-700">
-                <FileSpreadsheet className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="text-xs sm:text-sm font-bold text-amber-950">
-                  ตั้งค่าการเชื่อมต่อ Google Sheets กลาง (ระบบไร้ Database)
-                </h4>
-                <p className="text-xs text-amber-800/90 mt-0.5">
-                  เพื่อบันทึกและซิงค์ข้อมูลผู้ป่วยแบบ Online ข้ามอุปกรณ์ (Computer, Tablet, Mobile) กรุณาใส่ URL ของ Google Apps Script Web App
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsGoogleSheetsModalOpen(true)}
-              className="px-4 py-2 rounded-xl bg-[#004d40] hover:bg-[#005a4b] text-white text-xs font-semibold shadow-xs transition flex-shrink-0 cursor-pointer"
-            >
-              ตั้งค่า Google Sheets
-            </button>
+        {/* Loading Spinner Indicator */}
+        {isLoading && !currentShift && (
+          <div className="bg-white/80 backdrop-blur-sm border border-slate-200 rounded-2xl p-6 flex items-center justify-center gap-3 text-slate-600 shadow-xs">
+            <Loader2 className="w-5 h-5 animate-spin text-teal-600" />
+            <span className="text-sm font-medium">กำลังโหลดข้อมูลล่าสุดจาก Google Sheets...</span>
           </div>
         )}
 
-        {gasStatus.state === 'error' && (
+        {/* Error / Offline Alert Banner */}
+        {errorMessage && (
           <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center flex-shrink-0 text-rose-700">
@@ -498,10 +469,10 @@ export default function App() {
               </div>
               <div>
                 <h4 className="text-xs sm:text-sm font-bold text-rose-950">
-                  ไม่สามารถติดต่อ Google Apps Script Web App ได้
+                  ไม่สามารถโหลดข้อมูลจาก Google Sheets ได้
                 </h4>
                 <p className="text-xs text-rose-800/90 mt-0.5">
-                  {gasStatus.errorMessage || 'กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือตั้งค่าสิทธิ์ Web App เป็น Anyone'}
+                  {errorMessage} (ระบบปฏิบัติตามคำสั่ง: ห้ามใช้ mock data โดยเด็ดขาด)
                 </p>
               </div>
             </div>
@@ -509,15 +480,15 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => refreshFromGoogleSheets()}
-                className="px-3 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                className="px-3.5 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold shadow-xs transition cursor-pointer flex items-center gap-1.5 active:scale-95"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>ลองเชื่อมต่อใหม่</span>
+                <span>ลองใหม่</span>
               </button>
               <button
                 type="button"
                 onClick={() => setIsGoogleSheetsModalOpen(true)}
-                className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-semibold transition cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-semibold transition cursor-pointer active:scale-95"
               >
                 ตั้งค่า URL
               </button>
@@ -528,7 +499,7 @@ export default function App() {
         {currentView === 'logs' ? (
           <HandoverLogsView
             shifts={shiftsHistory}
-            currentShift={currentShift}
+            currentShift={displayShift}
             onBackToDashboard={() => setCurrentView('dashboard')}
             onSelectShift={handleSelectShiftAsActive}
             onEditShift={handleEditShift}
@@ -539,15 +510,15 @@ export default function App() {
           <>
             {/* 1. Active Shift Hero Banner */}
             <HeroShiftBanner
-              shift={currentShift}
+              shift={displayShift}
               onOpenHistory={() => setCurrentView('logs')}
               onOpenEditShift={() => setIsEditActiveShiftOpen(true)}
             />
 
             {/* 2. Patient Summary Card (ภาพรวมยอดผู้ป่วย เวรปัจจุบัน) */}
             <PatientSummaryCard
-              stats={currentShift.stats || patientStats}
-              shift={currentShift}
+              stats={displayShift.stats || patientStats}
+              shift={displayShift}
               onUpdateStats={handleUpdateStats}
               onOpenEditShift={() => setIsEditActiveShiftOpen(true)}
             />
@@ -560,22 +531,23 @@ export default function App() {
               onScrollToHandovers={scrollToHandovers}
             />
 
-            {/* 4. Bottom 2 Columns: เรื่องส่งต่อข้อมูล & Chart ค้าง */}
+            {/* 4. Two Columns: เรื่องส่งต่อข้อมูล & Chart ค้าง */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 md:gap-6 items-stretch">
               {/* Left: เรื่องส่งต่อข้อมูล */}
               <HandoverSection
                 items={handoverItems}
-                currentIncharge={currentShift.inchargeName}
+                currentIncharge={displayShift.inchargeName}
                 onAddItem={handleAddHandover}
                 onEditItem={handleEditHandover}
                 onDeleteItem={handleDeleteHandover}
                 onToggleComplete={handleToggleCompleteHandover}
+                onViewHistory={() => setIsHandoverHistoryOpen(true)}
               />
 
               {/* Right: Chart ค้าง */}
               <PendingChartSection
                 charts={pendingCharts}
-                currentDate={currentShift.date}
+                currentDate={displayShift.date}
                 onAddChart={handleAddPendingChart}
                 onEditChart={handleEditPendingChart}
                 onDeleteChart={handleDeletePendingChart}
@@ -591,7 +563,7 @@ export default function App() {
         isOpen={isAddShiftOpen}
         onClose={() => setIsAddShiftOpen(false)}
         onAddShift={handleAddShift}
-        currentShift={currentShift}
+        currentShift={displayShift}
         shiftsHistory={shiftsHistory}
         activeHandoverItems={handoverItems}
         activePendingCharts={pendingCharts}
@@ -600,17 +572,17 @@ export default function App() {
       <EditShiftModal
         isOpen={isEditActiveShiftOpen}
         onClose={() => setIsEditActiveShiftOpen(false)}
-        shift={currentShift}
+        shift={displayShift}
         onSaveShift={handleEditShift}
         shiftsHistory={shiftsHistory}
-        previousShift={shiftsHistory.find((s) => s.id !== currentShift.id)}
+        previousShift={shiftsHistory.find((s) => s.id !== displayShift.id)}
       />
 
       <DashboardStatsModal
         isOpen={isDashboardModalOpen}
         onClose={() => setIsDashboardModalOpen(false)}
-        shift={currentShift}
-        stats={currentShift.stats || patientStats}
+        shift={displayShift}
+        stats={displayShift.stats || patientStats}
         handovers={handoverItems}
         charts={pendingCharts}
       />
@@ -618,6 +590,16 @@ export default function App() {
       <GoogleAppsScriptModal
         isOpen={isGoogleSheetsModalOpen}
         onClose={() => setIsGoogleSheetsModalOpen(false)}
+      />
+
+      <HandoverHistoryModal
+        isOpen={isHandoverHistoryOpen}
+        onClose={() => setIsHandoverHistoryOpen(false)}
+        historyItems={handoverHistory}
+        onRefresh={async () => {
+          await refreshFromGoogleSheets();
+        }}
+        isLoading={isLoading}
       />
     </div>
   );

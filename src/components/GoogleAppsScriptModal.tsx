@@ -23,7 +23,7 @@ import {
   setStoredGasUrl,
   testGasConnection,
   getStoredSpreadsheetInfo,
-} from '../services/googleAppsScriptService';
+} from '../services/googleSheets';
 import { refreshFromGoogleSheets } from '../services/wardDataService';
 
 interface GoogleAppsScriptModalProps {
@@ -107,13 +107,14 @@ var SHEET_NAMES = {
 function doGet(e) {
   try {
     var params = (e && e.parameter) ? e.parameter : {};
-    var action = params.action || 'ping';
+    var action = params.action || 'getAllData';
     var result;
     if (action === 'ping') result = handlePing();
+    else if (action === 'getAllData') result = handleGetAllData();
     else if (action === 'getState') result = handleGetState();
-    else if (action === 'getHistory') result = handleGetHistory();
+    else if (action === 'getHistory' || action === 'getShifts') result = handleGetHistory();
     else if (action === 'getSettings') result = handleGetSettings();
-    else result = { success: false, error: 'Unknown action: ' + action };
+    else result = handleGetAllData();
     return createJsonResponse(result);
   } catch (err) {
     return createJsonResponse({ success: false, error: err.toString() });
@@ -128,20 +129,38 @@ function doPost(e) {
     } else if (e && e.parameter) {
       payload = e.parameter;
     }
-    var action = payload.action || 'saveState';
+    var action = payload.action || 'getAllData';
     var result;
-    if (action === 'saveState') result = handleSaveState(payload);
+    if (action === 'getAllData') result = handleGetAllData();
+    else if (action === 'getState') result = handleGetState();
+    else if (action === 'getHistory' || action === 'getShifts') result = handleGetHistory();
+    else if (action === 'saveState') result = handleSaveState(payload);
     else if (action === 'saveShift') result = handleSaveShift(payload);
     else if (action === 'deleteShift') result = handleDeleteShift(payload);
     else if (action === 'saveHandovers') result = handleSaveHandovers(payload.handoverItems || []);
     else if (action === 'savePendingCharts') result = handleSavePendingCharts(payload.pendingCharts || []);
     else if (action === 'saveSettings') result = handleSaveSettings(payload.settings || {});
     else if (action === 'ping') result = handlePing();
-    else result = { success: false, error: 'Unknown POST action: ' + action };
+    else result = handleGetAllData();
     return createJsonResponse(result);
   } catch (err) {
     return createJsonResponse({ success: false, error: err.toString() });
   }
+}
+
+function handleGetAllData() {
+  var stateRes = handleGetState();
+  var historyRes = handleGetHistory();
+  var stateData = (stateRes && stateRes.data) ? stateRes.data : {};
+  return {
+    success: true,
+    activeShift: stateData.activeShift || null,
+    patientStats: stateData.patientStats || null,
+    handoverItems: stateData.handoverItems || [],
+    pendingCharts: stateData.pendingCharts || [],
+    shifts: (historyRes && historyRes.shifts) ? historyRes.shifts : [],
+    timestamp: new Date().toISOString()
+  };
 }
 
 function createJsonResponse(data) {

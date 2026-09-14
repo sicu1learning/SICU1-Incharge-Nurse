@@ -72,17 +72,13 @@ export const EditShiftModal: React.FC<EditShiftModalProps> = ({
     return found || previousShift || null;
   }, [allShifts, date, shiftType, shift, previousShift]);
 
-  // Nurse list state
-  const [nurseList, setNurseList] = useState<string[]>(() => {
-    const saved = localStorage.getItem('sicu_nurse_list');
-    return saved ? JSON.parse(saved) : DEFAULT_NURSES;
-  });
+  // Nurse list state (synced with Google Sheets via wardDataService)
+  const [nurseList, setNurseList] = useState<string[]>(DEFAULT_NURSES);
 
   useEffect(() => {
     const unsubscribe = subscribeNurseList((cloudNurses) => {
       if (cloudNurses && cloudNurses.length > 0) {
         setNurseList(cloudNurses);
-        localStorage.setItem('sicu_nurse_list', JSON.stringify(cloudNurses));
       }
     });
     return () => unsubscribe();
@@ -396,8 +392,7 @@ export const EditShiftModal: React.FC<EditShiftModalProps> = ({
     if (!nurseList.includes(name)) {
       const updated = [...nurseList, name];
       setNurseList(updated);
-      localStorage.setItem('sicu_nurse_list', JSON.stringify(updated));
-      syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to cloud:', err));
+      syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to Google Sheets:', err));
       setInchargeName(name);
       setNurseError(false);
     }
@@ -409,8 +404,7 @@ export const EditShiftModal: React.FC<EditShiftModalProps> = ({
     e.stopPropagation();
     const updated = nurseList.filter((n) => n !== nameToDelete);
     setNurseList(updated);
-    localStorage.setItem('sicu_nurse_list', JSON.stringify(updated));
-    syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to cloud:', err));
+    syncNurseListToCloud(updated).catch((err) => console.warn('Failed to sync nurse list to Google Sheets:', err));
     if (inchargeName === nameToDelete) {
       setInchargeName('');
     }

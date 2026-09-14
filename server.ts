@@ -63,53 +63,197 @@ app.all('/api/gas', async (req, res) => {
       });
     }
 
-    const method = req.method.toUpperCase();
-    let finalFetchUrl = targetUrl;
+    // Check if user accidentally pasted Google Sheets Spreadsheet URL instead of Web App URL
+    if (targetUrl.includes('docs.google.com/spreadsheets')) {
+      return res.status(400).json({
+        success: false,
+        error: 'URL ที่ระบุเป็น URL ของ Google Sheets Spreadsheet กรุณาสร้างและ Deploy Google Apps Script Web App แล้วนำ URL ที่ลงท้ายด้วย /exec มาใส่แทน',
+      });
+    }
 
+    if (targetUrl.includes('/edit')) {
+      return res.status(400).json({
+        success: false,
+        error: 'URL ที่ระบุเป็นหน้าจอแก้ไขโค้ด Apps Script (มี /edit) กรุณากดปุ่ม Deploy > Manage deployments > คัดลอก Web app URL ที่ลงท้ายด้วย /exec มาใส่แทน',
+      });
+    }
+
+    const method = req.method.toUpperCase();
+    const action = req.body?.action || req.query?.action;
+
+    // Helper to perform a fetch to Google Apps Script
+    const executeFetch = async (url: string, fetchMethod: string, bodyData?: any) => {
+      const headers: Record<string, string> = {
+        'Accept': 'application/json',
+      };
+      const fetchOpts: RequestInit = {
+        method: fetchMethod,
+        headers,
+        redirect: 'follow',
+      };
+      if (fetchMethod === 'POST') {
+        headers['Content-Type'] = 'text/plain;charset=utf-8';
+        fetchOpts.body = JSON.stringify(bodyData || {});
+      }
+
+      let resp: Response;
+      try {
+        resp = await fetch(url, fetchOpts);
+      } catch (err: any) {
+        // Retry once on network blip
+        try {
+          await new Promise((r) => setTimeout(r, 1000));
+          resp = await fetch(url, fetchOpts);
+        } catch (retryErr: any) {
+          return {
+            isHtml: false,
+            status: 502,
+            raw: '',
+            data: {
+              success: false,
+              error: `ไม่สามารถเชื่อมต่อไปยัง Google Apps Script ได้ (Network error: ${retryErr?.message || 'fetch failed'})`,
+            },
+          };
+        }
+      }
+
+      const text = await resp.text();
+
+      // Check if response is HTML (e.g. Google Login redirect due to non-public permissions)
+      if (text.trim().startsWith('<') || text.toLowerCase().includes('<!doctype') || text.toLowerCase().includes('<html')) {
+        return {
+          isHtml: true,
+          status: resp.status,
+          raw: text,
+        };
+      }
+
+      try {
+        const json = JSON.parse(text);
+        return {
+          isHtml: false,
+          status: resp.status,
+          data: json,
+        };
+      } catch {
+        return {
+          isHtml: false,
+          status: resp.status,
+          raw: text,
+          data: { success: false, error: `Invalid response format from GAS: ${text.slice(0, 150)}` },
+        };
+      }
+    };
+
+    // 1. Initial attempt using incoming method
+    let finalUrl = targetUrl;
     if (method === 'GET') {
       try {
-        const parsedUrl = new URL(targetUrl);
+        const parsed = new URL(targetUrl);
         for (const [key, val] of Object.entries(req.query)) {
           if (key !== 'url' && val !== undefined) {
-            parsedUrl.searchParams.set(key, String(val));
+            parsed.searchParams.set(key, String(val));
           }
         }
-        finalFetchUrl = parsedUrl.toString();
+        finalUrl = parsed.toString();
       } catch {
-        finalFetchUrl = targetUrl;
+        finalUrl = targetUrl;
       }
     }
 
-    const headers: Record<string, string> = {
-      'Accept': 'application/json',
-    };
+    let result = await executeFetch(finalUrl, method, req.body);
 
-    let fetchOptions: RequestInit = {
-      method,
-      headers,
-      redirect: 'follow',
-    };
-
-    if (method === 'POST') {
-      headers['Content-Type'] = 'text/plain;charset=utf-8';
-      fetchOptions.body = JSON.stringify(req.body);
-    }
-
-    const response = await fetch(finalFetchUrl, fetchOptions);
-    const contentType = response.headers.get('content-type') || '';
-
-    if (contentType.includes('application/json')) {
-      const data = await response.json();
-      return res.json(data);
-    } else {
-      const text = await response.text();
-      try {
-        const parsed = JSON.parse(text);
-        return res.json(parsed);
-      } catch {
-        return res.json({ success: response.ok, raw: text });
+    // If HTML received from a custom URL, try fallback to system configured GOOGLE_APPS_SCRIPT_URL
+    if (result.isHtml && process.env.GOOGLE_APPS_SCRIPT_URL && targetUrl !== process.env.GOOGLE_APPS_SCRIPT_URL) {
+      console.log('Custom GAS URL returned HTML, falling back to system GOOGLE_APPS_SCRIPT_URL');
+      let fallbackUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+      if (method === 'GET') {
+        try {
+          const parsed = new URL(fallbackUrl);
+          for (const [key, val] of Object.entries(req.query)) {
+            if (key !== 'url' && val !== undefined) {
+              parsed.searchParams.set(key, String(val));
+            }
+          }
+          fallbackUrl = parsed.toString();
+        } catch {}
+      }
+      const systemResult = await executeFetch(fallbackUrl, method, req.body);
+      if (!systemResult.isHtml) {
+        result = systemResult;
       }
     }
+
+    // If still HTML received, return clear human-friendly diagnostic error
+    if (result.isHtml) {
+      let specificReason = 'กรุณาตรวจสอบว่าได้ตั้งค่า Deploy Web App ให้ "Who has access" เป็น "Anyone" และใช้ URL ที่ลงท้ายด้วย "/exec"';
+      const rawLower = (result.raw || '').toLowerCase();
+      if (rawLower.includes('accounts.google.com') || rawLower.includes('servicelogin')) {
+        specificReason = 'ติดหน้าเข้าสู่ระบบของ Google (เนื่องจาก Deploy Web App โดยไม่ได้เลือก "Who has access" เป็น "Anyone" ทุกคน)';
+      } else if (rawLower.includes('script function not found') || rawLower.includes('doget') || rawLower.includes('dopost')) {
+        specificReason = 'ไม่พบฟังก์ชัน doGet หรือ doPost ใน Apps Script';
+      }
+
+      return res.status(400).json({
+        success: false,
+        error: `Google Apps Script ส่งกลับเป็นหน้าเว็บ HTML (${specificReason})`,
+      });
+    }
+
+    // 2. Intelligent Auto-Fallback: If POST failed with "Unknown POST action", try GET or alternate actions
+    if (
+      result.data &&
+      result.data.success === false &&
+      typeof result.data.error === 'string' &&
+      result.data.error.includes('Unknown')
+    ) {
+      // If action was getAllData or getState, try GET ?action=...
+      if (action) {
+        try {
+          const getUrl = new URL(targetUrl);
+          getUrl.searchParams.set('action', String(action));
+          const getFallback = await executeFetch(getUrl.toString(), 'GET');
+          if (!getFallback.isHtml && getFallback.data && getFallback.data.success !== false) {
+            result = getFallback;
+          } else if (action === 'getAllData') {
+            // Try action=getState
+            getUrl.searchParams.set('action', 'getState');
+            const stateFallback = await executeFetch(getUrl.toString(), 'GET');
+            if (!stateFallback.isHtml && stateFallback.data && stateFallback.data.success !== false) {
+              result = stateFallback;
+            } else {
+              // Try POST action=getState
+              const statePost = await executeFetch(targetUrl, 'POST', { action: 'getState' });
+              if (!statePost.isHtml && statePost.data && statePost.data.success !== false) {
+                result = statePost;
+              }
+            }
+          }
+        } catch {
+          // keep original result
+        }
+      }
+    }
+
+    // Normalize legacy getState structure to uniform ward data if needed
+    if (result.data && result.data.success && result.data.data && !result.data.activeShift) {
+      const inner = result.data.data;
+      result.data = {
+        success: true,
+        activeShift: inner.activeShift || null,
+        patientStats: inner.patientStats || null,
+        handoverItems: inner.handoverItems || [],
+        pendingCharts: inner.pendingCharts || [],
+        settings: inner.settings || {},
+        shifts: inner.shifts || [],
+        nurses: inner.nurses || [],
+        valuableItems: inner.valuableItems || [],
+        handoverHistory: inner.handoverHistory || [],
+        timestamp: inner.updatedAt || new Date().toISOString(),
+      };
+    }
+
+    return res.status(result.status || 200).json(result.data);
   } catch (err: any) {
     console.error('GAS Proxy Error:', err?.message || err);
     return res.status(502).json({
