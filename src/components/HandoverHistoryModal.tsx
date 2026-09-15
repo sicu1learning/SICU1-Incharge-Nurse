@@ -227,13 +227,23 @@ export const HandoverHistoryModal: React.FC<HandoverHistoryModalProps> = ({
                     {item.archivedAt && (
                       <span>
                         จัดเก็บเมื่อ:{' '}
-                        {new Date(item.archivedAt).toLocaleString('th-TH', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        {(() => {
+                          try {
+                            const d = new Date(item.archivedAt);
+                            return isNaN(d.getTime())
+                              ? String(item.archivedAt)
+                              : d.toLocaleString('th-TH', {
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  timeZone: 'Asia/Bangkok',
+                                });
+                          } catch {
+                            return String(item.archivedAt);
+                          }
+                        })()}
                       </span>
                     )}
                   </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Moon, Sun, Sunset, User, History, Edit3, Clock } from 'lucide-react';
 import { ShiftInfo } from '../types';
+import { normalizeThaiDate } from '../utils/shiftUtils';
 
 interface HeroShiftBannerProps {
   shift?: ShiftInfo | null;
@@ -80,7 +81,7 @@ export const HeroShiftBanner: React.FC<HeroShiftBannerProps> = ({
         {/* Date and Shift Title */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-white flex items-center gap-2 flex-wrap font-['Prompt',sans-serif]">
-            <span>{safeShift.date || 'วันนี้'}</span>
+            <span>{safeShift.date ? normalizeThaiDate(safeShift.date) : 'วันนี้'}</span>
             <span className="text-slate-400 font-light">·</span>
             <span className="text-[#2dd4bf] font-bold">{safeShift.shiftType}</span>
           </div>

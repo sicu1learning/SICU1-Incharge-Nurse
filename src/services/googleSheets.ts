@@ -99,12 +99,13 @@ export async function testGasConnection(url?: string): Promise<{
     if (url) {
       setCustomGasUrl(url);
     }
+    // Google Apps Script natively handles 'ping' to report connection status and spreadsheet name
     const res = await callGasApi<{
       success: boolean;
       spreadsheetName?: string;
       spreadsheetUrl?: string;
       error?: string;
-    }>('testConnection');
+    }>('ping', undefined, { method: 'GET', timeoutMs: 15000 });
 
     return {
       success: true,
@@ -114,7 +115,7 @@ export async function testGasConnection(url?: string): Promise<{
   } catch (err: any) {
     return {
       success: false,
-      error: err?.message || 'การเชื่อมต่อกับ Google Sheets ล้มเหลว',
+      error: extractErrorMessage(err) || 'การเชื่อมต่อกับ Google Sheets ล้มเหลว',
     };
   }
 }
@@ -140,6 +141,28 @@ export async function checkServerConfig(): Promise<boolean> {
   return false;
 }
 
+export function extractErrorMessage(err: any): string {
+  if (!err) return 'ข้อผิดพลาดที่ไม่ทราบสาเหตุ';
+  if (typeof err === 'string') {
+    if (err === '[object Object]') return 'เกิดข้อผิดพลาดในการตอบสนองจาก Google Apps Script (Response format error)';
+    return err;
+  }
+  if (err instanceof Error) {
+    if (err.message && err.message !== '[object Object]') return err.message;
+  }
+  if (typeof err === 'object') {
+    if (typeof err.error === 'string' && err.error !== '[object Object]') return err.error;
+    if (typeof err.error === 'object' && err.error !== null) return extractErrorMessage(err.error);
+    if (typeof err.message === 'string' && err.message !== '[object Object]') return err.message;
+    if (typeof err.details === 'string') return err.details;
+    try {
+      const json = JSON.stringify(err);
+      if (json !== '{}') return json;
+    } catch {}
+  }
+  return String(err) === '[object Object]' ? 'เกิดข้อผิดพลาดในการประมวลผลข้อมูลจาก Google Sheets' : String(err);
+}
+
 /**
  * Central Google Apps Script Request Dispatcher
  * Calls /api/gas proxy on the server.
@@ -151,11 +174,11 @@ export async function callGasApi<T = any>(
   options: { timeoutMs?: number; signal?: AbortSignal; method?: 'POST' | 'GET' } = {}
 ): Promise<T> {
   const customUrl = getCustomGasUrl();
-  const timeoutMs = options.timeoutMs || 45000;
+  const timeoutMs = options.timeoutMs || 25000;
 
   const controller = new AbortController();
   const timer = setTimeout(
-    () => controller.abort(new Error('การเชื่อมต่อกับ Google Apps Script หมดเวลา (Timeout 45s)')),
+    () => controller.abort(new Error('การเชื่อมต่อกับ Google Apps Script หมดเวลา (Timeout 25s)')),
     timeoutMs
   );
 
@@ -199,7 +222,8 @@ export async function callGasApi<T = any>(
     let response: Response | null = null;
     let lastNetworkErr: any = null;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // Retry once on transient network glitch, never retry if aborted
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         response = await fetch(url, {
           method: fetchMethod,
@@ -210,12 +234,12 @@ export async function callGasApi<T = any>(
         if (response) break;
       } catch (fetchErr: any) {
         lastNetworkErr = fetchErr;
-        // Do not retry if aborted
+        // Do not retry if aborted or timed out
         if (fetchErr?.name === 'AbortError' || controller.signal.aborted) {
           throw fetchErr;
         }
-        if (attempt < 3) {
-          await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
         }
       }
     }
@@ -242,15 +266,16 @@ export async function callGasApi<T = any>(
     }
 
     if (!response.ok) {
-      const errText = data?.error || data?.message || `HTTP ${response.status} ${response.statusText}`;
+      const rawErr = data?.error || data?.message || `HTTP ${response.status} ${response.statusText}`;
+      const errText = extractErrorMessage(rawErr);
       throw new Error(errText);
     }
 
-    // Auto-fallback: if POST returned unknown action and we haven't tried GET, or try getState
+    // Auto-fallback: if POST returned unknown action and we haven't tried GET, try GET
     if (!data || data.success === false) {
-      const errMsg = data?.error || data?.message || 'Google Sheets API returned success=false';
+      const rawErrMsg = data?.error || data?.message || 'Google Sheets API returned success=false';
+      const errMsg = extractErrorMessage(rawErrMsg);
       if (typeof errMsg === 'string' && errMsg.includes('Unknown') && fetchMethod === 'POST') {
-        // Retry via GET
         return await callGasApi<T>(action, payload, { ...options, method: 'GET' });
       }
       throw new Error(errMsg);
@@ -271,12 +296,15 @@ export async function callGasApi<T = any>(
     clearTimeout(timer);
     let msg: string;
 
-    if (error.name === 'AbortError' || String(error.message).includes('aborted')) {
-      msg = 'การเชื่อมต่อกับ Google Apps Script ใช้เวลานานกว่าปกติ (Timeout 45s) หรือถูกยกเลิก กรุณาลองใหม่อีกครั้ง';
-    } else if (String(error.message).includes('Failed to fetch') || String(error.message).includes('NetworkError')) {
+    if (error?.name === 'AbortError' || String(error?.message || '').includes('aborted')) {
+      msg = 'การเชื่อมต่อกับ Google Apps Script ใช้เวลานานกว่าปกติ (Timeout) หรือถูกยกเลิก กรุณาลองใหม่อีกครั้ง';
+    } else if (String(error?.message || '').includes('Failed to fetch') || String(error?.message || '').includes('NetworkError')) {
       msg = 'ไม่สามารถเชื่อมต่อเครือข่ายได้ชั่วคราว (Network connection interrupted) ระบบจะลองเชื่อมต่อใหม่โดยอัตโนมัติ';
     } else {
-      msg = error?.message || 'ไม่สามารถติดต่อ Google Sheets ผ่าน /api/gas ได้';
+      msg = extractErrorMessage(error);
+      if (!msg || msg === '[object Object]') {
+        msg = 'ไม่สามารถติดต่อ Google Sheets ผ่าน /api/gas ได้';
+      }
     }
 
     currentStatus = {
@@ -311,15 +339,16 @@ export interface AllWardData {
 /**
  * 1. getAllData()
  * Loads all ward datasets in a single efficient request.
+ * Natively queries GET ?action=getState which is fast, lightweight, and supported out-of-the-box.
  */
 export async function getAllData(): Promise<AllWardData> {
   let res: any;
   try {
-    res = await callGasApi('getAllData');
+    res = await callGasApi('getState', undefined, { method: 'GET', timeoutMs: 25000 });
   } catch (err: any) {
-    // If getAllData failed with Unknown action, try getState
+    // If getState failed with Unknown action, try getAllData
     if (String(err?.message || '').includes('Unknown')) {
-      res = await callGasApi('getState');
+      res = await callGasApi('getAllData', undefined, { method: 'GET', timeoutMs: 25000 });
     } else {
       throw err;
     }
@@ -539,6 +568,15 @@ export async function deletePendingChart(id: string): Promise<boolean> {
     id,
   });
   return res.success;
+}
+
+export async function resetWardData(): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const res = await callGasApi<{ success: boolean; message?: string; error?: string }>('resetAllData', {});
+    return res;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to reset ward data' };
+  }
 }
 
 export async function saveNurses(nurses: string[]): Promise<boolean> {

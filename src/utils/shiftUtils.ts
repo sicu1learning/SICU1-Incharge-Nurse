@@ -1,41 +1,208 @@
 import { ShiftType, ShiftInfo } from '../types';
 
-/**
- * Parses a date string in format "DD/MM/YYYY", "D/M/YY", "DD/MM/BBBB", etc.
- * Handles Thai Buddhist Era (พ.ศ.) years like 2569 or 69.
- */
-export function parseThaiDate(dateStr: string): { day: number; month: number; year: number } {
-  const now = new Date();
-  const currentDay = now.getDate();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear() + 543;
+export const THAI_MONTH_MAP: Record<string, number> = {
+  'มกราคม': 1, 'ม.ค.': 1, 'ม.ค': 1,
+  'กุมภาพันธ์': 2, 'ก.พ.': 2, 'ก.พ': 2,
+  'มีนาคม': 3, 'มี.ค.': 3, 'มี.ค': 3,
+  'เมษายน': 4, 'เม.ย.': 4, 'เม.ย': 4,
+  'พฤษภาคม': 5, 'พ.ค.': 5, 'พ.ค': 5,
+  'มิถุนายน': 6, 'มิ.ย.': 6, 'มิ.ย': 6,
+  'กรกฎาคม': 7, 'ก.ค.': 7, 'ก.ค': 7,
+  'สิงหาคม': 8, 'ส.ค.': 8, 'ส.ค': 8,
+  'กันยายน': 9, 'ก.ย.': 9, 'ก.ย': 9,
+  'ตุลาคม': 10, 'ต.ค.': 10, 'ต.ค': 10,
+  'พฤศจิกายน': 11, 'พ.ย.': 11, 'พ.ย': 11,
+  'ธันวาคม': 12, 'ธ.ค.': 12, 'ธ.ค': 12,
+};
 
-  if (!dateStr || typeof dateStr !== 'string') {
-    return { day: currentDay, month: currentMonth, year: currentYear };
+export const ENG_MONTH_MAP: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  january: 1, february: 2, march: 3, april: 4, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+};
+
+/**
+ * Returns year, month, day, hours, minutes in Thailand timezone (Asia/Bangkok, GMT+7)
+ * to prevent date jumping ("เด้งวันที่") across time zones.
+ */
+export function getBangkokDateTimeParts(date: Date = new Date()): {
+  day: number;
+  month: number;
+  year: number;
+  hours: number;
+  minutes: number;
+} {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    let day = date.getDate();
+    let month = date.getMonth() + 1;
+    let year = date.getFullYear();
+    let hours = date.getHours();
+    let minutes = date.getMinutes();
+
+    for (const p of parts) {
+      if (p.type === 'day') day = parseInt(p.value, 10);
+      else if (p.type === 'month') month = parseInt(p.value, 10);
+      else if (p.type === 'year') year = parseInt(p.value, 10);
+      else if (p.type === 'hour') hours = parseInt(p.value, 10);
+      else if (p.type === 'minute') minutes = parseInt(p.value, 10);
+    }
+    const thaiYear = year < 2400 ? year + 543 : year;
+    return { day, month, year: thaiYear, hours, minutes };
+  } catch {
+    const d = date.getDate();
+    const m = date.getMonth() + 1;
+    const y = date.getFullYear();
+    return {
+      day: d,
+      month: m,
+      year: y < 2400 ? y + 543 : y,
+      hours: date.getHours(),
+      minutes: date.getMinutes(),
+    };
+  }
+}
+
+/**
+ * Parses any date format safely without time zone bouncing:
+ * - Google Apps Script raw string: "Tue Aug 01 2569 00:00:00 GMT+0700 (中南半島時間)"
+ * - Standard Thai format: "DD/MM/YYYY", "D/M/YYYY", "DD-MM-YYYY"
+ * - ISO string: "2026-09-13T09:29:49.158Z", "2026-08-01"
+ * - Thai month words: "1 สิงหาคม 2569", "13 ก.ย. 2569"
+ * - Embedded shift ID: "shift-afternoon-13-09-2569"
+ */
+export function parseThaiDate(dateInput: any): { day: number; month: number; year: number } {
+  if (!dateInput) {
+    const now = getBangkokDateTimeParts();
+    return { day: now.day, month: now.month, year: now.year };
   }
 
-  const cleaned = dateStr.trim().replace(/[-.]/g, '/');
-  const parts = cleaned.split('/');
+  if (dateInput instanceof Date) {
+    const parts = getBangkokDateTimeParts(dateInput);
+    return { day: parts.day, month: parts.month, year: parts.year };
+  }
 
-  if (parts.length >= 3) {
-    let day = parseInt(parts[0], 10) || currentDay;
-    let month = parseInt(parts[1], 10) || currentMonth;
-    let year = parseInt(parts[2], 10) || currentYear;
+  if (typeof dateInput !== 'string') {
+    const now = getBangkokDateTimeParts();
+    return { day: now.day, month: now.month, year: now.year };
+  }
 
-    // Handle 2-digit Buddhist year (e.g., 69 -> 2569)
-    if (year < 100) {
-      year += 2500;
-    }
-    // If entered in AD (e.g., 2026 -> convert to BE 2569)
-    else if (year < 2400) {
-      year += 543;
-    }
+  const s = dateInput.trim();
+  if (!s) {
+    const now = getBangkokDateTimeParts();
+    return { day: now.day, month: now.month, year: now.year };
+  }
 
+  // 1. Standard Thai format: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
+  const dmyMatch = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (dmyMatch) {
+    let day = parseInt(dmyMatch[1], 10);
+    let month = parseInt(dmyMatch[2], 10);
+    let year = parseInt(dmyMatch[3], 10);
+    if (year < 100) year += 2500;
+    else if (year < 2400) year += 543;
     return { day, month, year };
   }
 
-  return { day: currentDay, month: currentMonth, year: currentYear };
+  // 2. English date strings (e.g. "Tue Aug 01 2569 00:00:00 GMT+0700 (中南半島時間)" or "01 Aug 2569")
+  const engMatch =
+    s.match(/([a-zA-Z]{3,9})\s+(\d{1,2})\s+(\d{4})/i) ||
+    s.match(/(\d{1,2})\s+([a-zA-Z]{3,9})\s+(\d{4})/i);
+  if (engMatch) {
+    let mStr = '';
+    let day = 0;
+    let year = 0;
+    if (isNaN(Number(engMatch[1]))) {
+      mStr = engMatch[1].toLowerCase();
+      day = parseInt(engMatch[2], 10);
+      year = parseInt(engMatch[3], 10);
+    } else {
+      day = parseInt(engMatch[1], 10);
+      mStr = engMatch[2].toLowerCase();
+      year = parseInt(engMatch[3], 10);
+    }
+    const month = ENG_MONTH_MAP[mStr];
+    if (month && day && year) {
+      if (year < 2400) year += 543;
+      return { day, month, year };
+    }
+  }
+
+  // 3. Thai month format (e.g. "1 สิงหาคม 2569" or "13 ก.ย. 2569")
+  for (const [mName, mNum] of Object.entries(THAI_MONTH_MAP)) {
+    if (s.includes(mName)) {
+      const parts = s.replace(mName, ' ').trim().split(/\s+/);
+      if (parts.length >= 2) {
+        const day = parseInt(parts[0], 10);
+        let year = parseInt(parts[1], 10);
+        if (day && year) {
+          if (year < 2400) year += 543;
+          return { day, month: mNum, year };
+        }
+      }
+    }
+  }
+
+  // 4. ISO format YYYY-MM-DD (e.g. 2026-08-01 or 2026-09-13T09:29:49.158Z)
+  const isoMatch = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (isoMatch) {
+    let year = parseInt(isoMatch[1], 10);
+    const month = parseInt(isoMatch[2], 10);
+    const day = parseInt(isoMatch[3], 10);
+
+    // If ISO with time in UTC (e.g. ends with Z), convert using Bangkok timezone (+7)
+    if (s.includes('T') && s.includes('Z')) {
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        const p = getBangkokDateTimeParts(d);
+        return { day: p.day, month: p.month, year: p.year };
+      }
+    }
+    if (year < 2400) year += 543;
+    return { day, month, year };
+  }
+
+  // 5. Check if string contains DD-MM-YYYY pattern anywhere (e.g. in shift ID "shift-afternoon-13-09-2569")
+  const embeddedMatch = s.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (embeddedMatch) {
+    let day = parseInt(embeddedMatch[1], 10);
+    let month = parseInt(embeddedMatch[2], 10);
+    let year = parseInt(embeddedMatch[3], 10);
+    if (year < 2400) year += 543;
+    return { day, month, year };
+  }
+
+  const fallback = getBangkokDateTimeParts();
+  return { day: fallback.day, month: fallback.month, year: fallback.year };
 }
+
+/**
+ * Normalizes any date representation into standard clean Thai Buddhist date string: "DD/MM/YYYY"
+ * Example:
+ * - "Tue Aug 01 2569 00:00:00 GMT+0700 (中南半島時間)" -> "01/08/2569"
+ * - "13-09-2569" -> "13/09/2569"
+ * - "2026-08-01" -> "01/08/2569"
+ */
+export function normalizeThaiDate(dateInput: any): string {
+  if (!dateInput) {
+    const now = getBangkokDateTimeParts();
+    return formatThaiDate(now.day, now.month, now.year);
+  }
+  const { day, month, year } = parseThaiDate(dateInput);
+  return formatThaiDate(day, month, year);
+}
+
+export const getThaiDateDisplay = normalizeThaiDate;
 
 /**
  * Formats day, month, and Buddhist year into "DD/MM/YYYY" (e.g., "21/08/2569")
@@ -228,7 +395,7 @@ export function findPreviousShiftInList(
 }
 
 /**
- * Returns current date in Thai format (DD/MM/YYYY) and current shift based on real local time
+ * Returns current date in Thai format (DD/MM/YYYY) and current shift based on Bangkok (GMT+7) local time
  */
 export function getCurrentThaiDateAndShift(): {
   date: string;
@@ -236,13 +403,10 @@ export function getCurrentThaiDateAndShift(): {
   timeStr: string;
   isoDate: string;
 } {
-  const now = new Date();
-  const day = now.getDate();
-  const month = now.getMonth() + 1;
-  const year = now.getFullYear() + 543;
-  const date = formatThaiDate(day, month, year);
+  const bkk = getBangkokDateTimeParts();
+  const date = formatThaiDate(bkk.day, bkk.month, bkk.year);
 
-  const hours = now.getHours();
+  const hours = bkk.hours;
   let shiftType: ShiftType = 'เวรเช้า';
   if (hours >= 0 && hours < 8) {
     shiftType = 'เวรดึก';
@@ -252,10 +416,10 @@ export function getCurrentThaiDateAndShift(): {
     shiftType = 'เวรบ่าย';
   }
 
-  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const minutes = String(bkk.minutes).padStart(2, '0');
   const timeStr = `${date} ${String(hours).padStart(2, '0')}:${minutes} น.`;
 
-  return { date, shiftType, timeStr, isoDate: now.toISOString() };
+  return { date, shiftType, timeStr, isoDate: new Date().toISOString() };
 }
 
 /**

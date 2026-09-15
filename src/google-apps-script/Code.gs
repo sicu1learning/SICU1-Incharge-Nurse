@@ -2,34 +2,46 @@
  * ==============================================================================
  * SICU1 Incharge Nurse - Google Apps Script Web API Backend
  * ==============================================================================
- *
  * สถาปัตยกรรม:
  * SICU Incharge Nurse Web App -> Google Apps Script Web API -> Google Sheets
  *
- * แหล่งจัดเก็บข้อมูลจริงเพียงแห่งเดียว: Google Sheets
- * ไม่ใช้ Firebase / Firestore / Database อื่นใดทั้งสิ้น
+ * แหล่งจัดเก็บข้อมูลจริงเพียงแห่งเดียว: Google Sheets (Google Spreadsheet)
+ * ไม่ใช้ Firebase, Firestore, SQLite, หรือ Cloud SQL ใดๆ ทั้งสิ้น
  *
- * ชื่อชีต (Tabs):
- * 1. Active_Shift     - เวรที่กำลังปฏิบัติหน้าที่ปัจจุบัน (Active Live Shift)
- * 2. Shifts_History   - บันทึกประวัติเวรทั้งหมด (Primary Key: id / shiftId)
- * 3. Handover_Items   - รายการเรื่องส่งต่อข้อมูลปัจจุบัน (Active Handover Items)
- * 4. Handover_History - บันทึกประวัติเรื่องส่งต่อที่ถูกเก็บถาวร (Archive with source_handover_id)
- * 5. Pending_Charts   - รายการชาร์ตค้าง (Pending Medical Records)
- * 6. Valuable_Items   - บันทึกทรัพย์สินมีค่าผู้ป่วย (Patient Valuable Items)
- * 7. Nurses           - บัญชีรายชื่อพยาบาลประจำวอร์ด (Ward Nurses Directory)
- * 8. Settings         - การตั้งค่าระบบวอร์ด (Ward Settings)
+ * โครงสร้าง 10 Sheet มาตรฐานใน Google Spreadsheet:
+ * 1. Summary_CurrentShift: ข้อมูลสรุปสถานะเวรปัจจุบัน ยอดผู้ป่วย สถิติ และ Snapshot วอร์ด
+ * 2. staff: รายชื่อพยาบาลและเจ้าหน้าที่ประจำวอร์ด
+ * 3. Doctor staff: รายชื่อแพทย์เจ้าของไข้
+ * 4. Shifts_History: บันทึกประวัติเวรทั้งหมดอย่างละเอียด พร้อมคอลัมน์ JSON สำรอง
+ * 5. Handovers: รายการเรื่องส่งต่อระหว่างเวรที่กำลังดำเนินการ (Active Handovers)
+ * 6. Pending_Charts: รายการชาร์ตค้าง สถานะ และจำนวนวันค้าง
+ * 7. Equipment_Log / Equipment_Wean_Log: บันทึกการใช้อุปกรณ์และการหย่าเครื่องช่วยหายใจ
+ * 8. Movement_Records: รายการรับใหม่ ย้ายเข้า ย้ายออก เสียชีวิต
+ * 9. Consultations: รายการ Consult แพทย์เฉพาะทาง
+ * 10. Incidents_Risk_Log: รายการอุบัติการณ์และความเสี่ยงทางคลินิก
+ * (พร้อม Handover_History, Valuable_Items, และ Settings เพื่อความสมบูรณ์แบบของระบบ)
  * ==============================================================================
  */
 
 var SHEET_NAMES = {
-  ACTIVE_SHIFT: 'Active_Shift',
-  SHIFTS_HISTORY: 'Shifts_History',
-  HANDOVER_ITEMS: 'Handover_Items',
-  HANDOVER_HISTORY: 'Handover_History',
-  PENDING_CHARTS: 'Pending_Charts',
-  VALUABLE_ITEMS: 'Valuable_Items',
-  NURSES: 'Nurses',
-  SETTINGS: 'Settings'
+  SUMMARY_CURRENT_SHIFT: 'Summary_CurrentShift', // ข้อมูลสรุปสถานะเวรปัจจุบัน
+  STAFF: 'staff',                               // รายชื่อพยาบาลและเจ้าหน้าที่
+  DOCTOR_STAFF: 'Doctor staff',                 // รายชื่อแพทย์เจ้าของไข้
+  SHIFTS_HISTORY: 'Shifts_History',             // บันทึกประวัติเวรทั้งหมด
+  HANDOVERS: 'Handovers',                       // เรื่องส่งต่อระหว่างเวร
+  PENDING_CHARTS: 'Pending_Charts',             // รายการชาร์ตค้าง
+  EQUIPMENT_LOG: 'Equipment_Log',               // บันทึกการใช้อุปกรณ์
+  EQUIPMENT_WEAN_LOG: 'Equipment_Wean_Log',     // บันทึกการหย่าเครื่องช่วยหายใจ
+  MOVEMENT_RECORDS: 'Movement_Records',         // รับใหม่ ย้ายเข้า ย้ายออก เสียชีวิต
+  CONSULTATIONS: 'Consultations',               // รายการ Consult
+  INCIDENTS_RISK_LOG: 'Incidents_Risk_Log',     // อุบัติการณ์และความเสี่ยง
+  HANDOVER_HISTORY: 'Handover_History',         // ประวัติการส่งต่อที่เก็บถาวร
+  VALUABLE_ITEMS: 'Valuable_Items',             // บันทึกทรัพย์สินมีค่าผู้ป่วย
+  SETTINGS: 'Settings',                         // การตั้งค่าระบบวอร์ด
+  // ชื่อเดิมสำหรับรองรับย้อนหลัง (Backward Compatibility)
+  ACTIVE_SHIFT: 'Summary_CurrentShift',
+  NURSES: 'staff',
+  HANDOVER_ITEMS: 'Handovers'
 };
 
 var DEFAULT_NURSES = [
@@ -45,6 +57,17 @@ var DEFAULT_NURSES = [
   'สัจจพร งามยิ่งยศ'
 ];
 
+var DEFAULT_DOCTORS = [
+  'นพ.ธีระพงษ์ (General Surgery)',
+  'พญ.กานต์พิชชา (Cardiovascular Surgery)',
+  'นพ.วรวิทย์ (Neurosurgery)',
+  'พญ.สุชาดา (Trauma / Critical Care)',
+  'นพ.อัครเดช (Orthopedics)',
+  'นพ.อนุชา (Thoracic Surgery)',
+  'พญ.นลินี (Surgical ICU Fellow)',
+  'นพ.พงศกร (Pediatric Surgery)'
+];
+
 /**
  * Handle GET Requests
  */
@@ -52,41 +75,47 @@ function doGet(e) {
   try {
     var params = (e && e.parameter) ? e.parameter : {};
     var action = params.action || 'ping';
-
     var result;
+
     if (action === 'ping') {
       result = handlePing();
+    } else if (action === 'getState') {
+      result = handleGetState();
     } else if (action === 'getAllData') {
       result = handleGetAllData();
-    } else if (action === 'getShifts') {
+    } else if (action === 'getShifts' || action === 'getHistory') {
       result = handleGetShifts();
-    } else if (action === 'getNurses') {
-      result = handleGetNurses();
-    } else if (action === 'getValuableItems') {
-      result = handleGetValuableItems();
-    } else if (action === 'getPendingCharts') {
-      result = handleGetPendingCharts();
-    } else if (action === 'getHandoverItems') {
+    } else if (action === 'getStaff' || action === 'getNurses') {
+      result = handleGetStaff();
+    } else if (action === 'getDoctorStaff') {
+      result = handleGetDoctorStaff();
+    } else if (action === 'getHandoverItems' || action === 'getHandovers') {
       result = handleGetHandoverItems();
     } else if (action === 'getHandoverHistory') {
       result = handleGetHandoverHistory();
-    } else if (action === 'getState') {
-      result = handleGetState();
-    } else if (action === 'getHistory') {
-      result = handleGetShifts();
+    } else if (action === 'getPendingCharts') {
+      result = handleGetPendingCharts();
+    } else if (action === 'getMovementRecords') {
+      result = handleGetMovementRecords();
+    } else if (action === 'getConsultations') {
+      result = handleGetConsultations();
+    } else if (action === 'getIncidents') {
+      result = handleGetIncidents();
+    } else if (action === 'getValuableItems') {
+      result = handleGetValuableItems();
     } else if (action === 'getSettings') {
       result = handleGetSettings();
+    } else if (action === 'initSheets' || action === 'setupSheets') {
+      result = handleInitSheets();
+    } else if (action === 'resetAllData' || action === 'clearAllData') {
+      result = handleResetAllData();
     } else {
-      result = { success: false, error: 'Unknown GET action: ' + action };
+      result = handleGetState();
     }
 
     return createJsonResponse(result);
   } catch (error) {
-    return createJsonResponse({
-      success: false,
-      error: error.toString(),
-      stack: error.stack
-    });
+    return createJsonResponse({ success: false, error: error.toString(), stack: error.stack });
   }
 }
 
@@ -109,66 +138,64 @@ function doPost(e) {
     var action = payload.action || 'getAllData';
     var result;
 
-    if (action === 'getAllData') {
+    if (action === 'ping') {
+      result = handlePing();
+    } else if (action === 'getState') {
+      result = handleGetState();
+    } else if (action === 'getAllData') {
       result = handleGetAllData();
-    } else if (action === 'getShifts') {
-      result = handleGetShifts();
-    } else if (action === 'getNurses') {
-      result = handleGetNurses();
-    } else if (action === 'getValuableItems') {
-      result = handleGetValuableItems();
-    } else if (action === 'getPendingCharts') {
-      result = handleGetPendingCharts();
-    } else if (action === 'getHandoverItems') {
-      result = handleGetHandoverItems();
-    } else if (action === 'getHandoverHistory') {
-      result = handleGetHandoverHistory();
     } else if (action === 'saveShift') {
       result = handleSaveShift(payload);
-    } else if (action === 'saveValuableItem') {
-      result = handleSaveValuableItem(payload);
-    } else if (action === 'savePendingChart') {
-      result = handleSavePendingChart(payload);
-    } else if (action === 'saveHandoverItem') {
-      result = handleSaveHandoverItem(payload);
-    } else if (action === 'archiveHandoverItem') {
-      result = handleArchiveHandoverItem(payload);
-    } else if (action === 'deleteHandoverItem') {
-      result = handleDeleteHandoverItem(payload);
     } else if (action === 'deleteShift') {
       result = handleDeleteShift(payload);
-    } else if (action === 'deleteValuableItem') {
-      result = handleDeleteValuableItem(payload);
-    } else if (action === 'deletePendingChart') {
-      result = handleDeletePendingChart(payload);
-    } else if (action === 'saveNurses') {
-      result = handleSaveNurses(payload);
-    } else if (action === 'saveState') {
-      result = handleSaveState(payload);
+    } else if (action === 'saveHandoverItem') {
+      result = handleSaveHandoverItem(payload);
+    } else if (action === 'deleteHandoverItem') {
+      result = handleDeleteHandoverItem(payload);
+    } else if (action === 'archiveHandoverItem') {
+      result = handleArchiveHandoverItem(payload);
     } else if (action === 'saveHandovers') {
       result = handleSaveHandovers(payload.handoverItems || []);
+    } else if (action === 'savePendingChart') {
+      result = handleSavePendingChart(payload);
+    } else if (action === 'deletePendingChart') {
+      result = handleDeletePendingChart(payload);
     } else if (action === 'savePendingCharts') {
       result = handleSavePendingCharts(payload.pendingCharts || []);
+    } else if (action === 'saveStaff' || action === 'saveNurses') {
+      result = handleSaveStaff(payload);
+    } else if (action === 'saveDoctorStaff') {
+      result = handleSaveDoctorStaff(payload);
+    } else if (action === 'saveMovementRecord') {
+      result = handleSaveMovementRecord(payload);
+    } else if (action === 'saveConsultation') {
+      result = handleSaveConsultation(payload);
+    } else if (action === 'saveIncident') {
+      result = handleSaveIncident(payload);
+    } else if (action === 'saveValuableItem') {
+      result = handleSaveValuableItem(payload);
+    } else if (action === 'deleteValuableItem') {
+      result = handleDeleteValuableItem(payload);
+    } else if (action === 'saveState') {
+      result = handleSaveState(payload);
     } else if (action === 'saveSettings') {
       result = handleSaveSettings(payload.settings || {});
-    } else if (action === 'ping') {
-      result = handlePing();
+    } else if (action === 'initSheets') {
+      result = handleInitSheets();
+    } else if (action === 'resetAllData' || action === 'clearAllData') {
+      result = handleResetAllData();
     } else {
       result = { success: false, error: 'Unknown POST action: ' + action };
     }
 
     return createJsonResponse(result);
   } catch (error) {
-    return createJsonResponse({
-      success: false,
-      error: error.toString(),
-      stack: error.stack
-    });
+    return createJsonResponse({ success: false, error: error.toString(), stack: error.stack });
   }
 }
 
 /**
- * Helper: Send JSON Response with CORS headers
+ * Helper: Send JSON Response
  */
 function createJsonResponse(data) {
   var output = ContentService.createTextOutput(JSON.stringify(data));
@@ -177,16 +204,32 @@ function createJsonResponse(data) {
 }
 
 /**
- * Helper: Get or Create Sheet with headers
+ * Helper: getOrCreateSheet()
+ * ตรวจสอบและสร้างชีตพร้อมหัวตารางภาษาไทย/อังกฤษตามมาตรฐานอัตโนมัติหากยังไม่มีชีตนั้นๆ อยู่
  */
 function getOrCreateSheet(sheetName, headers) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(sheetName);
+
+  // ตรวจสอบ alias ย้อนหลังหากชื่อใหม่ยังไม่มี
+  if (!sheet) {
+    if (sheetName === SHEET_NAMES.SUMMARY_CURRENT_SHIFT) {
+      sheet = ss.getSheetByName('Active_Shift');
+    } else if (sheetName === SHEET_NAMES.STAFF) {
+      sheet = ss.getSheetByName('Nurses');
+    } else if (sheetName === SHEET_NAMES.HANDOVERS) {
+      sheet = ss.getSheetByName('Handover_Items');
+    }
+  }
+
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
     if (headers && headers.length > 0) {
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-      sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#004d40').setFontColor('#ffffff');
+      sheet.getRange(1, 1, 1, headers.length)
+        .setFontWeight('bold')
+        .setBackground('#004d40')
+        .setFontColor('#ffffff');
       sheet.setFrozenRows(1);
     }
   }
@@ -194,804 +237,274 @@ function getOrCreateSheet(sheetName, headers) {
 }
 
 /**
- * Test Connection Ping
+ * สร้างและจัดโครงสร้าง 10 Sheet มาตรฐานทั้งหมดใน Google Spreadsheet ทันที
+ */
+function handleInitSheets() {
+  var created = [];
+
+  // 1. Summary_CurrentShift
+  getOrCreateSheet(SHEET_NAMES.SUMMARY_CURRENT_SHIFT, [
+    'shiftId', 'date', 'shiftType', 'inchargeName', 'previousShiftInfo', 'isActive',
+    'carriedOver', 'currentRemaining', 'ventilatorCount', 'category5Count', 'category4Count',
+    'oxygenCount', 'postOpCount', 'createdAt', 'updatedAt', 'fullDataJson'
+  ]);
+  created.push(SHEET_NAMES.SUMMARY_CURRENT_SHIFT);
+
+  // 2. staff
+  var staffSheet = getOrCreateSheet(SHEET_NAMES.STAFF, [
+    'id', 'name', 'role', 'status', 'phone', 'notes', 'updatedAt'
+  ]);
+  if (staffSheet.getLastRow() < 2) {
+    for (var i = 0; i < DEFAULT_NURSES.length; i++) {
+      staffSheet.appendRow(['staff-' + (i + 1), DEFAULT_NURSES[i], 'RN พยาบาลวิชาชีพ', 'ปฏิบัติงาน', '', '', new Date().toISOString()]);
+    }
+  }
+  created.push(SHEET_NAMES.STAFF);
+
+  // 3. Doctor staff
+  var docSheet = getOrCreateSheet(SHEET_NAMES.DOCTOR_STAFF, [
+    'id', 'name', 'department', 'specialty', 'phone', 'status', 'updatedAt'
+  ]);
+  if (docSheet.getLastRow() < 2) {
+    for (var d = 0; d < DEFAULT_DOCTORS.length; d++) {
+      docSheet.appendRow(['doc-' + (d + 1), DEFAULT_DOCTORS[d], 'ศัลยศาสตร์', 'Surgical Staff', '', 'ประจำการ', new Date().toISOString()]);
+    }
+  }
+  created.push(SHEET_NAMES.DOCTOR_STAFF);
+
+  // 4. Shifts_History
+  getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY, [
+    'shiftId', 'date', 'shiftType', 'inchargeName', 'previousShiftInfo',
+    'carriedOver', 'transferredIn', 'admittedNew', 'transferredOut', 'againstAdvice',
+    'deceased', 'deceasedPostOp24Hr', 'admitDischarge24Hr', 'referOut', 'currentRemaining',
+    'category5Count', 'category4Count', 'ventilatorCount', 'oxygenCount', 'postOpCount',
+    'staffHead', 'staffRn', 'staffNa', 'staffClerk', 'staffTotal',
+    'weanVentilator', 'weanFoley', 'weanPeripheral', 'weanCentral', 'weanAssess', 'weanAttempt', 'weanSuccess',
+    'consultTotal', 'incidentCount', 'fullDataJson', 'createdAt', 'updatedAt'
+  ]);
+  created.push(SHEET_NAMES.SHIFTS_HISTORY);
+
+  // 5. Handovers
+  getOrCreateSheet(SHEET_NAMES.HANDOVERS, [
+    'id', 'title', 'details', 'patientName', 'bedNumber', 'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted', 'updatedAt'
+  ]);
+  created.push(SHEET_NAMES.HANDOVERS);
+
+  // 6. Pending_Charts
+  getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS, [
+    'id', 'patientName', 'hn', 'doctors', 'location', 'dateAdded', 'daysPending', 'note', 'shiftId', 'status', 'updatedAt'
+  ]);
+  created.push(SHEET_NAMES.PENDING_CHARTS);
+
+  // 7. Equipment_Log / Equipment_Wean_Log
+  getOrCreateSheet(SHEET_NAMES.EQUIPMENT_LOG, [
+    'id', 'shiftId', 'date', 'shiftType', 'inchargeName', 'ventilatorCount', 'foleyCatheter', 'peripheralLine', 'centralLine', 'weanAssess', 'weanAttempt', 'weanSuccess', 'notes', 'createdAt'
+  ]);
+  getOrCreateSheet(SHEET_NAMES.EQUIPMENT_WEAN_LOG, [
+    'id', 'shiftId', 'date', 'shiftType', 'inchargeName', 'ventilatorUse', 'foleyCatheter', 'peripheralLine', 'centralLine', 'weanAssess', 'weanAttempt', 'weanSuccess', 'notes', 'createdAt'
+  ]);
+  created.push(SHEET_NAMES.EQUIPMENT_LOG);
+
+  // 8. Movement_Records
+  getOrCreateSheet(SHEET_NAMES.MOVEMENT_RECORDS, [
+    'id', 'shiftId', 'date', 'shiftType', 'type', 'patientName', 'hn', 'bedNumber', 'wardOrHospital', 'time', 'details', 'createdAt'
+  ]);
+  created.push(SHEET_NAMES.MOVEMENT_RECORDS);
+
+  // 9. Consultations
+  getOrCreateSheet(SHEET_NAMES.CONSULTATIONS, [
+    'id', 'shiftId', 'date', 'shiftType', 'department', 'doctorName', 'patientName', 'hn', 'reason', 'status', 'urgent', 'createdAt'
+  ]);
+  created.push(SHEET_NAMES.CONSULTATIONS);
+
+  // 10. Incidents_Risk_Log
+  getOrCreateSheet(SHEET_NAMES.INCIDENTS_RISK_LOG, [
+    'id', 'shiftId', 'date', 'shiftType', 'category', 'severityLevel', 'description', 'patientName', 'hn', 'immediateAction', 'reportedBy', 'createdAt'
+  ]);
+  created.push(SHEET_NAMES.INCIDENTS_RISK_LOG);
+
+  // Complementary Sheets
+  getOrCreateSheet(SHEET_NAMES.HANDOVER_HISTORY, [
+    'id', 'source_handover_id', 'title', 'details', 'patientName', 'bedNumber', 'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted', 'archivedAt', 'archivedBy', 'archiveReason'
+  ]);
+  getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS, [
+    'id', 'patientName', 'hn', 'bedNumber', 'itemDescription', 'custodian', 'receiver', 'status', 'dateAdded', 'notes', 'shiftId', 'createdAt', 'updatedAt'
+  ]);
+  getOrCreateSheet(SHEET_NAMES.SETTINGS, ['key', 'value', 'updatedAt']);
+
+  return { success: true, message: 'All standard ward sheets initialized successfully', sheets: created };
+}
+
+/**
+ * Ping Connection Test
  */
 function handlePing() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets().map(function(s) { return s.getName(); });
   return {
     success: true,
     status: 'connected',
     spreadsheetName: ss.getName(),
     spreadsheetId: ss.getId(),
     spreadsheetUrl: ss.getUrl(),
+    sheets: sheets,
     timestamp: new Date().toISOString(),
     message: 'SICU1 Incharge Nurse Google Sheets Backend is ONLINE'
   };
 }
 
 /**
- * Get All Central Data at Once
+ * Get Active State
  */
-function handleGetAllData() {
-  var stateResult = handleGetState();
-  var shiftsResult = handleGetShifts();
-  var nursesResult = handleGetNurses();
-  var valuableResult = handleGetValuableItems();
-  var pendingResult = handleGetPendingCharts();
-  var handoverResult = handleGetHandoverItems();
-  var handoverHistoryResult = handleGetHandoverHistory();
-  var settingsResult = handleGetSettings();
+function handleGetState() {
+  var summarySheet = getOrCreateSheet(SHEET_NAMES.SUMMARY_CURRENT_SHIFT);
+  var activeShift = null;
+  var patientStats = null;
+
+  var lastRow = summarySheet.getLastRow();
+  if (lastRow >= 2) {
+    var rowValues = summarySheet.getRange(2, 1, 1, summarySheet.getLastColumn()).getValues()[0];
+    var shiftId = String(rowValues[0] || '').trim();
+    if (shiftId) {
+      var jsonCol = rowValues.length >= 16 ? rowValues[15] : '';
+      if (jsonCol && typeof jsonCol === 'string' && jsonCol.charAt(0) === '{') {
+        try {
+          activeShift = JSON.parse(jsonCol);
+          if (activeShift && activeShift.stats) patientStats = activeShift.stats;
+        } catch (e) {}
+      }
+
+      if (!activeShift) {
+        activeShift = {
+          id: shiftId,
+          date: String(rowValues[1] || ''),
+          shiftType: String(rowValues[2] || ''),
+          inchargeName: String(rowValues[3] || ''),
+          previousShiftInfo: String(rowValues[4] || ''),
+          isActive: Boolean(rowValues[5]),
+          stats: {
+            carriedOver: Number(rowValues[6]) || 0,
+            currentRemaining: Number(rowValues[7]) || 0,
+            ventilatorCount: Number(rowValues[8]) || 0,
+            category5Count: Number(rowValues[9]) || 0,
+            category4Count: Number(rowValues[10]) || 0,
+            oxygenCount: Number(rowValues[11]) || 0,
+            postOpCount: Number(rowValues[12]) || 0
+          }
+        };
+        patientStats = activeShift.stats;
+      }
+    }
+  }
+
+  var handoversRes = handleGetHandoverItems();
+  var pendingChartsRes = handleGetPendingCharts();
+  var staffRes = handleGetStaff();
+  var doctorRes = handleGetDoctorStaff();
+  var settingsRes = handleGetSettings();
 
   return {
     success: true,
-    activeShift: stateResult.data ? stateResult.data.activeShift : null,
-    patientStats: stateResult.data ? stateResult.data.patientStats : null,
-    shifts: shiftsResult.shifts || [],
-    nurses: nursesResult.nurses || [],
-    valuableItems: valuableResult.valuableItems || [],
-    pendingCharts: pendingResult.pendingCharts || [],
-    handoverItems: handoverResult.handoverItems || [],
-    handoverHistory: handoverHistoryResult.handoverHistory || [],
-    settings: settingsResult.settings || {},
+    activeShift: activeShift,
+    patientStats: patientStats,
+    handoverItems: handoversRes.handoverItems || [],
+    pendingCharts: pendingChartsRes.pendingCharts || [],
+    staff: staffRes.staff || [],
+    nurses: staffRes.nurses || [],
+    doctors: doctorRes.doctors || [],
+    settings: settingsRes.settings || {},
     timestamp: new Date().toISOString()
   };
 }
 
 /**
- * Get Shifts from Shifts_History
+ * Get All Data Central Bundle
+ */
+function handleGetAllData() {
+  var stateRes = handleGetState();
+  var shiftsRes = handleGetShifts();
+  var valuableRes = handleGetValuableItems();
+  var handoverHistoryRes = handleGetHandoverHistory();
+
+  return {
+    success: true,
+    activeShift: stateRes.activeShift,
+    patientStats: stateRes.patientStats,
+    shifts: shiftsRes.shifts || [],
+    staff: stateRes.staff || [],
+    nurses: stateRes.nurses || [],
+    doctors: stateRes.doctors || [],
+    handoverItems: stateRes.handoverItems || [],
+    pendingCharts: stateRes.pendingCharts || [],
+    valuableItems: valuableRes.valuableItems || [],
+    handoverHistory: handoverHistoryRes.handoverHistory || [],
+    settings: stateRes.settings || {},
+    timestamp: new Date().toISOString()
+  };
+}
+
+/**
+ * Shifts History
  */
 function handleGetShifts() {
-  var historySheet = getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY, [
-    'shiftId', 'date', 'shiftType', 'inchargeName', 'previousShiftInfo',
-    'carriedOver', 'transferredIn', 'admittedNew', 'transferredOut', 'againstAdvice',
-    'deceased', 'deceasedPostOp24Hr', 'admitDischarge24Hr', 'referOut', 'currentRemaining',
-    'category5Count', 'category4Count', 'ventilatorCount', 'oxygenCount', 'postOpCount',
-    'staffHead', 'staffRn', 'staffNa', 'staffClerk', 'staffTotal',
-    'weanVentilator', 'weanFoley', 'weanPeripheral', 'weanCentral', 'weanAssess', 'weanAttempt', 'weanSuccess',
-    'consultTotal', 'incidentCount', 'fullDataJson', 'createdAt', 'updatedAt'
-  ]);
+  var sheet = getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, shifts: [] };
 
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
   var shifts = [];
-  var lastRow = historySheet.getLastRow();
-  if (lastRow >= 2) {
-    var data = historySheet.getRange(2, 1, lastRow - 1, 37).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var row = data[i];
-      var shiftId = String(row[0] || '');
-      if (!shiftId) continue;
-
-      var fullData = null;
-      if (row[34]) {
-        try {
-          fullData = JSON.parse(row[34]);
-        } catch (e) {}
-      }
-
-      if (fullData && fullData.id) {
-        shifts.push(fullData);
-      } else {
-        shifts.push({
-          id: shiftId,
-          date: String(row[1] || ''),
-          shiftType: String(row[2] || ''),
-          inchargeName: String(row[3] || ''),
-          previousShiftInfo: String(row[4] || ''),
-          isActive: false,
-          createdAt: String(row[35] || ''),
-          updatedAt: String(row[36] || ''),
-          stats: {
-            carriedOver: Number(row[5]) || 0,
-            transferredIn: Number(row[6]) || 0,
-            admittedNew: Number(row[7]) || 0,
-            transferredOut: Number(row[8]) || 0,
-            againstAdvice: Number(row[9]) || 0,
-            deceased: Number(row[10]) || 0,
-            deceasedPostOp24Hr: Number(row[11]) || 0,
-            admitDischarge24Hr: Number(row[12]) || 0,
-            referOut: Number(row[13]) || 0,
-            currentRemaining: Number(row[14]) || 0,
-            category5Count: Number(row[15]) || 0,
-            category4Count: Number(row[16]) || 0,
-            ventilatorCount: Number(row[17]) || 0,
-            oxygenCount: Number(row[18]) || 0,
-            postOpCount: Number(row[19]) || 0
-          },
-          handoverItems: [],
-          pendingCharts: []
-        });
-      }
-    }
-  }
-
-  return {
-    success: true,
-    shifts: shifts
-  };
-}
-
-/**
- * Get Nurse Directory from Nurses Sheet
- */
-function handleGetNurses() {
-  var sheet = getOrCreateSheet(SHEET_NAMES.NURSES, ['name', 'role', 'status', 'updatedAt']);
-  var lastRow = sheet.getLastRow();
-  var nurses = [];
-
-  if (lastRow >= 2) {
-    var data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var name = String(data[i][0] || '').trim();
-      if (name) {
-        nurses.push(name);
-      }
-    }
-  }
-
-  // If sheet is freshly created, seed default nurses so ward has initial list
-  if (nurses.length === 0) {
-    nurses = DEFAULT_NURSES;
-    var rows = nurses.map(function(n) {
-      return [n, 'พยาบาลวิชาชีพ', 'active', new Date().toISOString()];
-    });
-    sheet.getRange(2, 1, rows.length, 4).setValues(rows);
-  }
-
-  return {
-    success: true,
-    nurses: nurses
-  };
-}
-
-/**
- * Save Nurse Directory
- */
-function handleSaveNurses(payload) {
-  var nurses = payload.nurses || [];
-  if (!Array.isArray(nurses)) {
-    return { success: false, error: 'Invalid nurses list' };
-  }
-
-  var sheet = getOrCreateSheet(SHEET_NAMES.NURSES, ['name', 'role', 'status', 'updatedAt']);
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    sheet.getRange(2, 1, lastRow - 1, 4).clearContent();
-  }
-
-  if (nurses.length > 0) {
-    var rows = nurses.map(function(n) {
-      return [String(n).trim(), 'พยาบาลวิชาชีพ', 'active', new Date().toISOString()];
-    });
-    sheet.getRange(2, 1, rows.length, 4).setValues(rows);
-  }
-
-  return {
-    success: true,
-    count: nurses.length
-  };
-}
-
-/**
- * Get Valuable Items from Valuable_Items Sheet
- */
-function handleGetValuableItems() {
-  var sheet = getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS, [
-    'id', 'patientName', 'hn', 'bedNumber', 'itemDescription',
-    'custodian', 'receiver', 'status', 'dateAdded', 'notes',
-    'shiftId', 'createdAt', 'updatedAt'
-  ]);
-
-  var items = [];
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    var data = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var row = data[i];
-      if (row[0]) {
-        items.push({
-          id: String(row[0]),
-          patientName: String(row[1] || ''),
-          hn: String(row[2] || ''),
-          bedNumber: String(row[3] || ''),
-          itemDescription: String(row[4] || ''),
-          custodian: String(row[5] || ''),
-          receiver: String(row[6] || ''),
-          status: String(row[7] || 'stored'),
-          dateAdded: String(row[8] || ''),
-          notes: String(row[9] || ''),
-          shiftId: String(row[10] || ''),
-          createdAt: String(row[11] || ''),
-          updatedAt: String(row[12] || '')
-        });
-      }
-    }
-  }
-
-  return {
-    success: true,
-    valuableItems: items
-  };
-}
-
-/**
- * Save / Update Valuable Item
- * Primary key: id. If id exists, updates row; otherwise appends row.
- */
-function handleSaveValuableItem(payload) {
-  var item = payload.item || payload;
-  if (!item || !item.id) {
-    return { success: false, error: 'Missing valuable item id' };
-  }
-
-  var sheet = getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS, [
-    'id', 'patientName', 'hn', 'bedNumber', 'itemDescription',
-    'custodian', 'receiver', 'status', 'dateAdded', 'notes',
-    'shiftId', 'createdAt', 'updatedAt'
-  ]);
-
-  var row = [
-    item.id,
-    item.patientName || '',
-    item.hn || '',
-    item.bedNumber || '',
-    item.itemDescription || '',
-    item.custodian || '',
-    item.receiver || '',
-    item.status || 'stored',
-    item.dateAdded || '',
-    item.notes || '',
-    item.shiftId || '',
-    item.createdAt || new Date().toISOString(),
-    new Date().toISOString()
-  ];
-
-  var lastRow = sheet.getLastRow();
-  var foundRow = -1;
-
-  if (lastRow >= 2) {
-    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(item.id)) {
-        foundRow = i + 2;
-        break;
-      }
-    }
-  }
-
-  if (foundRow > 0) {
-    sheet.getRange(foundRow, 1, 1, row.length).setValues([row]);
-  } else {
-    sheet.appendRow(row);
-  }
-
-  return {
-    success: true,
-    item: item,
-    message: 'Valuable item saved'
-  };
-}
-
-/**
- * Delete Valuable Item
- */
-function handleDeleteValuableItem(payload) {
-  var id = payload.id || payload.itemId;
-  if (!id) return { success: false, error: 'Missing item id' };
-
-  var sheet = getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS);
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return { success: true };
-
-  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(id)) {
-      sheet.deleteRow(i + 2);
-      return { success: true, message: 'Deleted valuable item' };
-    }
-  }
-
-  return { success: true };
-}
-
-/**
- * Get Active Handover Items from Handover_Items Sheet
- */
-function handleGetHandoverItems() {
-  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_ITEMS, [
-    'id', 'title', 'details', 'patientName', 'bedNumber',
-    'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted'
-  ]);
-
-  var items = [];
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    var data = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var row = data[i];
-      if (row[0]) {
-        items.push({
-          id: String(row[0]),
-          title: String(row[1] || ''),
-          details: String(row[2] || ''),
-          patientName: String(row[3] || ''),
-          bedNumber: String(row[4] || ''),
-          priority: String(row[5] || 'normal'),
-          category: String(row[6] || ''),
-          createdBy: String(row[7] || ''),
-          createdAt: String(row[8] || ''),
-          shiftId: String(row[9] || ''),
-          isCompleted: Boolean(row[10])
-        });
-      }
-    }
-  }
-
-  return {
-    success: true,
-    handoverItems: items
-  };
-}
-
-/**
- * Get Archived Handover History from Handover_History Sheet
- */
-function handleGetHandoverHistory() {
-  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_HISTORY, [
-    'id', 'source_handover_id', 'title', 'details', 'patientName',
-    'bedNumber', 'priority', 'category', 'createdBy', 'createdAt',
-    'shiftId', 'isCompleted', 'archivedAt', 'archivedBy', 'archiveReason'
-  ]);
-
-  var history = [];
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    var data = sheet.getRange(2, 1, lastRow - 1, 15).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var row = data[i];
-      if (row[0] || row[1]) {
-        history.push({
-          id: String(row[0] || ''),
-          source_handover_id: String(row[1] || row[0] || ''),
-          title: String(row[2] || ''),
-          details: String(row[3] || ''),
-          patientName: String(row[4] || ''),
-          bedNumber: String(row[5] || ''),
-          priority: String(row[6] || 'normal'),
-          category: String(row[7] || ''),
-          createdBy: String(row[8] || ''),
-          createdAt: String(row[9] || ''),
-          shiftId: String(row[10] || ''),
-          isCompleted: Boolean(row[11]),
-          archivedAt: String(row[12] || ''),
-          archivedBy: String(row[13] || ''),
-          archiveReason: String(row[14] || '')
-        });
-      }
-    }
-  }
-
-  // Sort newest archived first
-  history.sort(function(a, b) {
-    return new Date(b.archivedAt || 0).getTime() - new Date(a.archivedAt || 0).getTime();
-  });
-
-  return {
-    success: true,
-    handoverHistory: history
-  };
-}
-
-/**
- * Save / Update Handover Item
- * Primary key: id. If id exists, updates row; otherwise appends row.
- */
-function handleSaveHandoverItem(payload) {
-  var item = payload.item || payload;
-  if (!item || !item.id) {
-    return { success: false, error: 'Missing handover item id' };
-  }
-
-  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_ITEMS, [
-    'id', 'title', 'details', 'patientName', 'bedNumber',
-    'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted'
-  ]);
-
-  var row = [
-    item.id,
-    item.title || '',
-    item.details || '',
-    item.patientName || '',
-    item.bedNumber || '',
-    item.priority || 'normal',
-    item.category || '',
-    item.createdBy || '',
-    item.createdAt || new Date().toISOString(),
-    item.shiftId || '',
-    Boolean(item.isCompleted)
-  ];
-
-  var lastRow = sheet.getLastRow();
-  var foundRow = -1;
-
-  if (lastRow >= 2) {
-    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(item.id)) {
-        foundRow = i + 2;
-        break;
-      }
-    }
-  }
-
-  if (foundRow > 0) {
-    sheet.getRange(foundRow, 1, 1, row.length).setValues([row]);
-  } else {
-    sheet.appendRow(row);
-  }
-
-  return {
-    success: true,
-    item: item,
-    message: 'Handover item saved'
-  };
-}
-
-/**
- * Archive Handover Item
- * Moves record from Handover_Items to Handover_History with source_handover_id
- * Does NOT permanently delete from Google Sheets.
- */
-function handleArchiveHandoverItem(payload) {
-  var id = payload.id || payload.itemId;
-  if (!id) {
-    return { success: false, error: 'Missing id for archive' };
-  }
-
-  var activeSheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_ITEMS);
-  var historySheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_HISTORY, [
-    'id', 'source_handover_id', 'title', 'details', 'patientName',
-    'bedNumber', 'priority', 'category', 'createdBy', 'createdAt',
-    'shiftId', 'isCompleted', 'archivedAt', 'archivedBy', 'archiveReason'
-  ]);
-
-  var lastRow = activeSheet.getLastRow();
-  if (lastRow < 2) {
-    return { success: false, error: 'Handover items sheet is empty' };
-  }
-
-  var data = activeSheet.getRange(2, 1, lastRow - 1, 11).getValues();
-  var foundIndex = -1;
-  var targetRow = null;
 
   for (var i = 0; i < data.length; i++) {
-    if (String(data[i][0]) === String(id)) {
-      foundIndex = i + 2;
-      targetRow = data[i];
-      break;
+    var row = data[i];
+    var shiftId = String(row[0] || '').trim();
+    if (!shiftId) continue;
+
+    var fullJson = row.length >= 35 ? row[34] : '';
+    var shiftObj = null;
+    if (fullJson && typeof fullJson === 'string' && fullJson.charAt(0) === '{') {
+      try { shiftObj = JSON.parse(fullJson); } catch (e) {}
     }
-  }
 
-  if (foundIndex === -1 || !targetRow) {
-    return { success: false, error: 'Item not found in active handovers: ' + id };
-  }
-
-  // Create archive history row
-  var archiveId = 'arch-' + new Date().getTime();
-  var historyRow = [
-    archiveId,
-    String(targetRow[0]), // source_handover_id
-    String(targetRow[1] || ''),
-    String(targetRow[2] || ''),
-    String(targetRow[3] || ''),
-    String(targetRow[4] || ''),
-    String(targetRow[5] || 'normal'),
-    String(targetRow[6] || ''),
-    String(targetRow[7] || ''),
-    String(targetRow[8] || ''),
-    String(targetRow[9] || ''),
-    Boolean(targetRow[10]),
-    new Date().toISOString(),
-    payload.archivedBy || payload.inchargeName || '',
-    payload.archiveReason || 'Archived from Dashboard'
-  ];
-
-  // Append to Handover_History
-  historySheet.appendRow(historyRow);
-
-  // Delete from Handover_Items active sheet
-  activeSheet.deleteRow(foundIndex);
-
-  return {
-    success: true,
-    message: 'Handover item moved to Handover_History',
-    source_handover_id: id,
-    archiveId: archiveId
-  };
-}
-
-/**
- * Delete Handover Item directly from Handover_Items sheet
- */
-function handleDeleteHandoverItem(payload) {
-  var id = payload.id || (payload.item && payload.item.id);
-  if (!id) {
-    return { success: false, error: 'Missing handover item id' };
-  }
-  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_ITEMS, [
-    'id', 'title', 'details', 'patientName', 'bedNumber',
-    'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted'
-  ]);
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(id)) {
-        sheet.deleteRow(i + 2);
-        return { success: true, message: 'Handover item deleted' };
-      }
-    }
-  }
-  return { success: true, message: 'Item not found or already deleted' };
-}
-
-/**
- * Get Pending Charts
- */
-function handleGetPendingCharts() {
-  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS, [
-    'id', 'patientName', 'hn', 'doctors', 'location',
-    'dateAdded', 'daysPending', 'note', 'shiftId', 'status'
-  ]);
-
-  var pendingCharts = [];
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    var data = sheet.getRange(2, 1, lastRow - 1, 10).getValues();
-    for (var j = 0; j < data.length; j++) {
-      var row = data[j];
-      if (row[0]) {
-        var doctors = [];
-        try {
-          doctors = row[3] ? JSON.parse(row[3]) : [];
-        } catch (e) {
-          doctors = row[3] ? [String(row[3])] : [];
+    if (!shiftObj) {
+      shiftObj = {
+        id: shiftId,
+        date: String(row[1] || ''),
+        shiftType: String(row[2] || ''),
+        inchargeName: String(row[3] || ''),
+        previousShiftInfo: String(row[4] || ''),
+        stats: {
+          carriedOver: Number(row[5]) || 0,
+          transferredIn: Number(row[6]) || 0,
+          admittedNew: Number(row[7]) || 0,
+          transferredOut: Number(row[8]) || 0,
+          againstAdvice: Number(row[9]) || 0,
+          deceased: Number(row[10]) || 0,
+          deceasedPostOp24Hr: Number(row[11]) || 0,
+          admitDischarge24Hr: Number(row[12]) || 0,
+          referOut: Number(row[13]) || 0,
+          currentRemaining: Number(row[14]) || 0,
+          category5Count: Number(row[15]) || 0,
+          category4Count: Number(row[16]) || 0,
+          ventilatorCount: Number(row[17]) || 0,
+          oxygenCount: Number(row[18]) || 0,
+          postOpCount: Number(row[19]) || 0
         }
-        pendingCharts.push({
-          id: String(row[0]),
-          patientName: String(row[1] || ''),
-          hn: String(row[2] || ''),
-          doctors: doctors,
-          location: String(row[4] || 'SICU'),
-          dateAdded: String(row[5] || ''),
-          daysPending: Number(row[6]) || 0,
-          note: String(row[7] || ''),
-          shiftId: String(row[8] || ''),
-          status: String(row[9] || 'pending')
-        });
-      }
-    }
-  }
-
-  return {
-    success: true,
-    pendingCharts: pendingCharts
-  };
-}
-
-/**
- * Save / Update Pending Chart
- * Primary key: id. If id exists, updates row; otherwise appends row.
- */
-function handleSavePendingChart(payload) {
-  var chart = payload.chart || payload;
-  if (!chart || !chart.id) {
-    return { success: false, error: 'Missing pending chart id' };
-  }
-
-  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS, [
-    'id', 'patientName', 'hn', 'doctors', 'location',
-    'dateAdded', 'daysPending', 'note', 'shiftId', 'status'
-  ]);
-
-  var row = [
-    chart.id,
-    chart.patientName || '',
-    chart.hn || '',
-    JSON.stringify(chart.doctors || []),
-    chart.location || 'SICU',
-    chart.dateAdded || '',
-    Number(chart.daysPending) || 0,
-    chart.note || '',
-    chart.shiftId || '',
-    chart.status || 'pending'
-  ];
-
-  var lastRow = sheet.getLastRow();
-  var foundRow = -1;
-
-  if (lastRow >= 2) {
-    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(chart.id)) {
-        foundRow = i + 2;
-        break;
-      }
-    }
-  }
-
-  if (foundRow > 0) {
-    sheet.getRange(foundRow, 1, 1, row.length).setValues([row]);
-  } else {
-    sheet.appendRow(row);
-  }
-
-  return {
-    success: true,
-    chart: chart,
-    message: 'Pending chart saved'
-  };
-}
-
-/**
- * Delete Pending Chart
- */
-function handleDeletePendingChart(payload) {
-  var id = payload.id || payload.chartId;
-  if (!id) return { success: false, error: 'Missing chart id' };
-
-  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS);
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return { success: true };
-
-  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(id)) {
-      sheet.deleteRow(i + 2);
-      return { success: true, message: 'Deleted pending chart' };
-    }
-  }
-
-  return { success: true };
-}
-
-/**
- * Get Active Shift & State
- */
-function handleGetState() {
-  var activeShiftSheet = getOrCreateSheet(SHEET_NAMES.ACTIVE_SHIFT, [
-    'shiftId', 'date', 'shiftType', 'inchargeName', 'previousShiftInfo',
-    'isActive', 'createdAt', 'updatedAt', 'statsJson', 'movementRecordsJson',
-    'consultationDataJson', 'staffDataJson', 'equipmentWeanDataJson', 'incidentDataJson'
-  ]);
-
-  var activeShift = null;
-  var patientStats = null;
-
-  var lastRow = activeShiftSheet.getLastRow();
-  if (lastRow >= 2) {
-    var values = activeShiftSheet.getRange(2, 1, 1, 14).getValues()[0];
-    try {
-      var stats = values[8] ? JSON.parse(values[8]) : null;
-      var movementRecords = values[9] ? JSON.parse(values[9]) : [];
-      var consultationData = values[10] ? JSON.parse(values[10]) : null;
-      var staffData = values[11] ? JSON.parse(values[11]) : null;
-      var equipmentWeanData = values[12] ? JSON.parse(values[12]) : null;
-      var incidentData = values[13] ? JSON.parse(values[13]) : null;
-
-      activeShift = {
-        id: String(values[0] || ''),
-        date: String(values[1] || ''),
-        shiftType: String(values[2] || ''),
-        inchargeName: String(values[3] || ''),
-        previousShiftInfo: String(values[4] || ''),
-        isActive: Boolean(values[5]),
-        createdAt: String(values[6] || ''),
-        updatedAt: String(values[7] || ''),
-        stats: stats,
-        movementRecords: movementRecords,
-        consultationData: consultationData,
-        staffData: staffData,
-        equipmentWeanData: equipmentWeanData,
-        incidentData: incidentData,
-        handoverItems: [],
-        pendingCharts: []
       };
-      patientStats = stats;
-    } catch (e) {}
-  }
-
-  var handovers = handleGetHandoverItems().handoverItems || [];
-  var pendingCharts = handleGetPendingCharts().pendingCharts || [];
-  var settings = handleGetSettings().settings || {};
-
-  return {
-    success: true,
-    data: {
-      activeShift: activeShift,
-      patientStats: patientStats,
-      handoverItems: handovers,
-      pendingCharts: pendingCharts,
-      settings: settings,
-      updatedAt: new Date().toISOString()
     }
-  };
+    shifts.push(shiftObj);
+  }
+
+  return { success: true, shifts: shifts };
 }
 
-/**
- * Save Active State
- */
-function handleSaveState(payload) {
-  var shift = payload.currentShift || payload.activeShift;
-  var stats = payload.patientStats || (shift ? shift.stats : null);
-  var handoverItems = payload.handoverItems;
-  var pendingCharts = payload.pendingCharts;
-
-  if (shift) {
-    var activeShiftSheet = getOrCreateSheet(SHEET_NAMES.ACTIVE_SHIFT, [
-      'shiftId', 'date', 'shiftType', 'inchargeName', 'previousShiftInfo',
-      'isActive', 'createdAt', 'updatedAt', 'statsJson', 'movementRecordsJson',
-      'consultationDataJson', 'staffDataJson', 'equipmentWeanDataJson', 'incidentDataJson'
-    ]);
-
-    var rowValues = [
-      shift.id || '',
-      shift.date || '',
-      shift.shiftType || '',
-      shift.inchargeName || '',
-      shift.previousShiftInfo || '',
-      true,
-      shift.createdAt || new Date().toISOString(),
-      new Date().toISOString(),
-      JSON.stringify(stats || shift.stats || {}),
-      JSON.stringify(shift.movementRecords || []),
-      JSON.stringify(shift.consultationData || {}),
-      JSON.stringify(shift.staffData || {}),
-      JSON.stringify(shift.equipmentWeanData || {}),
-      JSON.stringify(shift.incidentData || {})
-    ];
-
-    activeShiftSheet.getRange(2, 1, 1, rowValues.length).setValues([rowValues]);
-  }
-
-  if (Array.isArray(handoverItems)) {
-    handleSaveHandovers(handoverItems);
-  }
-
-  if (Array.isArray(pendingCharts)) {
-    handleSavePendingCharts(pendingCharts);
-  }
-
-  return {
-    success: true,
-    message: 'Saved state successfully to Google Sheets',
-    updatedAt: new Date().toISOString()
-  };
-}
-
-/**
- * Save Shift to Shifts_History
- * Primary key: id / shiftId. If id exists, updates row; otherwise appends row.
- */
 function handleSaveShift(payload) {
   var shift = payload.shift || payload.currentShift;
-  if (!shift || !shift.id) {
-    return { success: false, error: 'Missing shift data or shift.id' };
-  }
+  if (!shift || !shift.id) return { success: false, error: 'Missing shift.id' };
 
-  var historySheet = getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY, [
-    'shiftId', 'date', 'shiftType', 'inchargeName', 'previousShiftInfo',
-    'carriedOver', 'transferredIn', 'admittedNew', 'transferredOut', 'againstAdvice',
-    'deceased', 'deceasedPostOp24Hr', 'admitDischarge24Hr', 'referOut', 'currentRemaining',
-    'category5Count', 'category4Count', 'ventilatorCount', 'oxygenCount', 'postOpCount',
-    'staffHead', 'staffRn', 'staffNa', 'staffClerk', 'staffTotal',
-    'weanVentilator', 'weanFoley', 'weanPeripheral', 'weanCentral', 'weanAssess', 'weanAttempt', 'weanSuccess',
-    'consultTotal', 'incidentCount', 'fullDataJson', 'createdAt', 'updatedAt'
-  ]);
-
+  var historySheet = getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY);
   var stats = shift.stats || {};
   var staff = shift.staffData || {};
   var wean = shift.equipmentWeanData || {};
-  var consult = shift.consultationData || {};
-  var incident = shift.incidentData || {};
 
   var row = [
     shift.id,
@@ -1016,7 +529,7 @@ function handleSaveShift(payload) {
     Number(stats.postOpCount) || 0,
     Number(staff.headCount) || 0,
     Number(staff.rnCount) || 0,
-    Number(staff.naCount || staff.pnCount) || 0,
+    Number(staff.naCount) || 0,
     Number(staff.clerkCount) || 0,
     Number(staff.totalStaff) || 0,
     Number(wean.ventilatorUse) || 0,
@@ -1026,8 +539,8 @@ function handleSaveShift(payload) {
     Number(wean.weanAssess) || 0,
     Number(wean.weanAttempt) || 0,
     Number(wean.weanSuccess) || 0,
-    Number(consult.totalCount) || 0,
-    Number(incident.totalIncidentCount || 0),
+    Number(shift.consultationData ? shift.consultationData.totalCount : 0) || 0,
+    Number(shift.incidentData ? (shift.incidentData.details ? 1 : 0) : 0),
     JSON.stringify(shift),
     shift.createdAt || new Date().toISOString(),
     new Date().toISOString()
@@ -1035,14 +548,10 @@ function handleSaveShift(payload) {
 
   var lastRow = historySheet.getLastRow();
   var foundRow = -1;
-
   if (lastRow >= 2) {
     var ids = historySheet.getRange(2, 1, lastRow - 1, 1).getValues();
     for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(shift.id)) {
-        foundRow = i + 2;
-        break;
-      }
+      if (String(ids[i][0]) === String(shift.id)) { foundRow = i + 2; break; }
     }
   }
 
@@ -1052,168 +561,658 @@ function handleSaveShift(payload) {
     historySheet.appendRow(row);
   }
 
-  // If marked active, update Active_Shift sheet as well
+  // Also update Summary_CurrentShift if active
   if (shift.isActive !== false) {
-    handleSaveState({ currentShift: shift });
+    var summarySheet = getOrCreateSheet(SHEET_NAMES.SUMMARY_CURRENT_SHIFT);
+    var sumRow = [
+      shift.id, shift.date || '', shift.shiftType || '', shift.inchargeName || '', shift.previousShiftInfo || '', true,
+      Number(stats.carriedOver) || 0, Number(stats.currentRemaining) || 0, Number(stats.ventilatorCount) || 0,
+      Number(stats.category5Count) || 0, Number(stats.category4Count) || 0, Number(stats.oxygenCount) || 0, Number(stats.postOpCount) || 0,
+      shift.createdAt || new Date().toISOString(), new Date().toISOString(), JSON.stringify(shift)
+    ];
+    var sLast = summarySheet.getLastRow();
+    if (sLast >= 2) summarySheet.getRange(2, 1, sLast - 1, summarySheet.getLastColumn()).clearContent();
+    summarySheet.getRange(2, 1, 1, sumRow.length).setValues([sumRow]);
   }
 
-  return {
-    success: true,
-    message: 'Shift saved to Google Sheets successfully',
-    shiftId: shift.id
-  };
+  return { success: true, message: 'Shift saved', shiftId: shift.id };
+}
+
+function handleDeleteShift(payload) {
+  var shiftId = payload.shiftId || payload.id;
+  if (!shiftId) return { success: false, error: 'Missing shiftId' };
+
+  var sheet = getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true };
+
+  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(shiftId)) {
+      sheet.deleteRow(i + 2);
+      break;
+    }
+  }
+  return { success: true, message: 'Shift deleted' };
 }
 
 /**
- * Delete Shift from Shifts_History
+ * Handovers
  */
-function handleDeleteShift(payload) {
-  var shiftId = payload.shiftId || payload.id;
-  if (!shiftId) {
-    return { success: false, error: 'Missing shiftId' };
-  }
+function handleGetHandoverItems() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVERS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, handoverItems: [] };
 
-  var historySheet = getOrCreateSheet(SHEET_NAMES.SHIFTS_HISTORY);
-  var lastRow = historySheet.getLastRow();
-  if (lastRow < 2) {
-    return { success: true, message: 'History sheet empty' };
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var items = [];
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var id = String(row[0] || '').trim();
+    if (!id) continue;
+    items.push({
+      id: id,
+      title: String(row[1] || ''),
+      details: String(row[2] || ''),
+      patientName: String(row[3] || ''),
+      bedNumber: String(row[4] || ''),
+      priority: String(row[5] || 'normal'),
+      category: String(row[6] || 'general'),
+      createdBy: String(row[7] || ''),
+      createdAt: String(row[8] || ''),
+      shiftId: String(row[9] || ''),
+      isCompleted: Boolean(row[10]),
+      updatedAt: String(row[11] || '')
+    });
   }
+  return { success: true, handoverItems: items };
+}
 
-  var ids = historySheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(shiftId)) {
-      historySheet.deleteRow(i + 2);
-      return { success: true, message: 'Deleted shift: ' + shiftId };
+function handleSaveHandoverItem(payload) {
+  var item = payload.item || payload;
+  if (!item || !item.id) return { success: false, error: 'Missing handover item id' };
+
+  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVERS);
+  var row = [
+    item.id, item.title || '', item.details || '', item.patientName || '', item.bedNumber || '',
+    item.priority || 'normal', item.category || 'general', item.createdBy || '', item.createdAt || new Date().toISOString(),
+    item.shiftId || '', Boolean(item.isCompleted), new Date().toISOString()
+  ];
+
+  var lastRow = sheet.getLastRow();
+  var foundRow = -1;
+  if (lastRow >= 2) {
+    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(item.id)) { foundRow = i + 2; break; }
     }
   }
 
-  return { success: true, message: 'Shift ID not found: ' + shiftId };
+  if (foundRow > 0) sheet.getRange(foundRow, 1, 1, row.length).setValues([row]);
+  else sheet.appendRow(row);
+
+  return { success: true, item: item, message: 'Handover item saved' };
 }
 
-/**
- * Save Batch Handovers
- */
-function handleSaveHandovers(items) {
-  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_ITEMS, [
-    'id', 'title', 'details', 'patientName', 'bedNumber',
-    'priority', 'category', 'createdBy', 'createdAt', 'shiftId', 'isCompleted'
-  ]);
+function handleDeleteHandoverItem(payload) {
+  var id = payload.id || payload.itemId;
+  if (!id) return { success: false, error: 'Missing id' };
 
+  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVERS);
   var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    sheet.getRange(2, 1, lastRow - 1, 11).clearContent();
-  }
+  if (lastRow < 2) return { success: true };
 
-  if (!items || items.length === 0) {
-    return { success: true, count: 0 };
+  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      sheet.deleteRow(i + 2);
+      break;
+    }
   }
+  return { success: true, message: 'Handover item deleted' };
+}
+
+function handleArchiveHandoverItem(payload) {
+  var id = payload.id || payload.itemId;
+  if (!id) return { success: false, error: 'Missing id' };
+
+  var activeSheet = getOrCreateSheet(SHEET_NAMES.HANDOVERS);
+  var lastRow = activeSheet.getLastRow();
+  if (lastRow < 2) return { success: true };
+
+  var ids = activeSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      var rowData = activeSheet.getRange(i + 2, 1, 1, activeSheet.getLastColumn()).getValues()[0];
+      var archiveSheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_HISTORY);
+      var archiveRow = [
+        'arch-' + Date.now(), rowData[0], rowData[1], rowData[2], rowData[3], rowData[4],
+        rowData[5], rowData[6], rowData[7], rowData[8], rowData[9], true,
+        new Date().toISOString(), payload.archivedBy || 'Incharge Nurse', payload.archiveReason || 'ส่งต่อเรียบร้อยแล้ว'
+      ];
+      archiveSheet.appendRow(archiveRow);
+      activeSheet.deleteRow(i + 2);
+      return { success: true, source_handover_id: id };
+    }
+  }
+  return { success: true };
+}
+
+function handleSaveHandovers(items) {
+  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVERS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  if (!items || items.length === 0) return { success: true, count: 0 };
 
   var rows = items.map(function(item) {
     return [
-      item.id || '',
-      item.title || '',
-      item.details || '',
-      item.patientName || '',
-      item.bedNumber || '',
-      item.priority || 'normal',
-      item.category || '',
-      item.createdBy || '',
-      item.createdAt || new Date().toISOString(),
-      item.shiftId || '',
-      Boolean(item.isCompleted)
+      item.id || '', item.title || '', item.details || '', item.patientName || '', item.bedNumber || '',
+      item.priority || 'normal', item.category || 'general', item.createdBy || '', item.createdAt || new Date().toISOString(),
+      item.shiftId || '', Boolean(item.isCompleted), new Date().toISOString()
     ];
   });
-
-  sheet.getRange(2, 1, rows.length, 11).setValues(rows);
+  sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
   return { success: true, count: rows.length };
 }
 
-/**
- * Save Batch Pending Charts
- */
-function handleSavePendingCharts(charts) {
-  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS, [
-    'id', 'patientName', 'hn', 'doctors', 'location',
-    'dateAdded', 'daysPending', 'note', 'shiftId', 'status'
-  ]);
-
+function handleGetHandoverHistory() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.HANDOVER_HISTORY);
   var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    sheet.getRange(2, 1, lastRow - 1, 10).clearContent();
+  if (lastRow < 2) return { success: true, handoverHistory: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var history = [];
+  for (var i = 0; i < data.length; i++) {
+    var r = data[i];
+    if (!r[0]) continue;
+    history.push({
+      id: r[0],
+      source_handover_id: r[1],
+      title: r[2],
+      details: r[3],
+      patientName: r[4],
+      bedNumber: r[5],
+      priority: r[6],
+      category: r[7],
+      createdBy: r[8],
+      createdAt: r[9],
+      shiftId: r[10],
+      isCompleted: Boolean(r[11]),
+      archivedAt: r[12],
+      archivedBy: r[13],
+      archiveReason: r[14]
+    });
   }
-
-  if (!charts || charts.length === 0) {
-    return { success: true, count: 0 };
-  }
-
-  var rows = charts.map(function(chart) {
-    return [
-      chart.id || '',
-      chart.patientName || '',
-      chart.hn || '',
-      JSON.stringify(chart.doctors || []),
-      chart.location || 'SICU',
-      chart.dateAdded || '',
-      Number(chart.daysPending) || 0,
-      chart.note || '',
-      chart.shiftId || '',
-      chart.status || 'pending'
-    ];
-  });
-
-  sheet.getRange(2, 1, rows.length, 10).setValues(rows);
-  return { success: true, count: rows.length };
+  return { success: true, handoverHistory: history };
 }
 
 /**
- * Save Ward Settings
+ * Pending Charts
  */
-function handleSaveSettings(settings) {
-  var sheet = getOrCreateSheet(SHEET_NAMES.SETTINGS, ['key', 'value', 'updatedAt']);
+function handleGetPendingCharts() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS);
   var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
+  if (lastRow < 2) return { success: true, pendingCharts: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var charts = [];
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var id = String(row[0] || '').trim();
+    if (!id) continue;
+
+    var doctors = [];
+    try {
+      var dJson = row[3];
+      doctors = (typeof dJson === 'string' && dJson.charAt(0) === '[') ? JSON.parse(dJson) : (dJson ? [dJson] : []);
+    } catch (e) {
+      doctors = row[3] ? [String(row[3])] : [];
+    }
+
+    charts.push({
+      id: id,
+      patientName: String(row[1] || ''),
+      hn: String(row[2] || ''),
+      doctors: doctors,
+      location: String(row[4] || 'SICU 1'),
+      dateAdded: String(row[5] || ''),
+      daysPending: Number(row[6]) || 1,
+      note: String(row[7] || ''),
+      shiftId: String(row[8] || ''),
+      status: String(row[9] || 'pending'),
+      updatedAt: String(row[10] || '')
+    });
   }
-
-  var keys = Object.keys(settings || {});
-  if (keys.length === 0) {
-    return { success: true };
-  }
-
-  var rows = keys.map(function(k) {
-    var val = typeof settings[k] === 'object' ? JSON.stringify(settings[k]) : String(settings[k]);
-    return [k, val, new Date().toISOString()];
-  });
-
-  sheet.getRange(2, 1, rows.length, 3).setValues(rows);
-  return { success: true, count: rows.length };
+  return { success: true, pendingCharts: charts };
 }
 
-/**
- * Get Ward Settings
- */
-function handleGetSettings() {
-  var sheet = getOrCreateSheet(SHEET_NAMES.SETTINGS, ['key', 'value', 'updatedAt']);
-  var lastRow = sheet.getLastRow();
-  var settings = {};
+function handleSavePendingChart(payload) {
+  var chart = payload.chart || payload;
+  if (!chart || !chart.id) return { success: false, error: 'Missing chart id' };
 
+  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS);
+  var row = [
+    chart.id, chart.patientName || '', chart.hn || '', JSON.stringify(chart.doctors || []),
+    chart.location || 'SICU 1', chart.dateAdded || '', Number(chart.daysPending) || 1,
+    chart.note || '', chart.shiftId || '', chart.status || 'pending', new Date().toISOString()
+  ];
+
+  var lastRow = sheet.getLastRow();
+  var foundRow = -1;
   if (lastRow >= 2) {
-    var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var k = String(data[i][0]);
-      var v = data[i][1];
-      if (k) {
-        try {
-          settings[k] = JSON.parse(v);
-        } catch (e) {
-          settings[k] = v;
-        }
-      }
+    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(chart.id)) { foundRow = i + 2; break; }
     }
   }
 
+  if (foundRow > 0) sheet.getRange(foundRow, 1, 1, row.length).setValues([row]);
+  else sheet.appendRow(row);
+
+  return { success: true, chart: chart, message: 'Pending chart saved' };
+}
+
+function handleDeletePendingChart(payload) {
+  var id = payload.id || payload.chartId;
+  if (!id) return { success: false, error: 'Missing chart id' };
+
+  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true };
+
+  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      sheet.deleteRow(i + 2);
+      break;
+    }
+  }
+  return { success: true, message: 'Pending chart deleted' };
+}
+
+function handleSavePendingCharts(charts) {
+  var sheet = getOrCreateSheet(SHEET_NAMES.PENDING_CHARTS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  if (!charts || charts.length === 0) return { success: true, count: 0 };
+
+  var rows = charts.map(function(chart) {
+    return [
+      chart.id || '', chart.patientName || '', chart.hn || '', JSON.stringify(chart.doctors || []),
+      chart.location || 'SICU 1', chart.dateAdded || '', Number(chart.daysPending) || 1,
+      chart.note || '', chart.shiftId || '', chart.status || 'pending', new Date().toISOString()
+    ];
+  });
+  sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  return { success: true, count: rows.length };
+}
+
+/**
+ * Staff & Nurses
+ */
+function handleGetStaff() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.STAFF);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, staff: [], nurses: DEFAULT_NURSES };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var staffList = [];
+  var nurseNames = [];
+
+  for (var i = 0; i < data.length; i++) {
+    var name = String(data[i][1] || '').trim();
+    if (name) {
+      staffList.push({
+        id: data[i][0] || ('staff-' + (i + 1)),
+        name: name,
+        role: data[i][2] || 'RN',
+        status: data[i][3] || 'active',
+        phone: data[i][4] || '',
+        notes: data[i][5] || ''
+      });
+      nurseNames.push(name);
+    }
+  }
+
+  return { success: true, staff: staffList, nurses: nurseNames.length > 0 ? nurseNames : DEFAULT_NURSES };
+}
+
+function handleSaveStaff(payload) {
+  var sheet = getOrCreateSheet(SHEET_NAMES.STAFF);
+  var staff = payload.staff || payload.nurses || [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+
+  if (Array.isArray(staff) && staff.length > 0) {
+    var rows = staff.map(function(item, idx) {
+      if (typeof item === 'string') {
+        return ['staff-' + (idx + 1), item, 'RN พยาบาลวิชาชีพ', 'ปฏิบัติงาน', '', '', new Date().toISOString()];
+      }
+      return [
+        item.id || ('staff-' + (idx + 1)), item.name || '', item.role || 'RN',
+        item.status || 'active', item.phone || '', item.notes || '', new Date().toISOString()
+      ];
+    });
+    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  return { success: true, count: staff.length };
+}
+
+/**
+ * Doctor Staff
+ */
+function handleGetDoctorStaff() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.DOCTOR_STAFF);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, doctors: DEFAULT_DOCTORS };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var doctors = [];
+  for (var i = 0; i < data.length; i++) {
+    var name = String(data[i][1] || '').trim();
+    if (name) doctors.push(name);
+  }
+  return { success: true, doctors: doctors.length > 0 ? doctors : DEFAULT_DOCTORS };
+}
+
+function handleSaveDoctorStaff(payload) {
+  var sheet = getOrCreateSheet(SHEET_NAMES.DOCTOR_STAFF);
+  var doctors = payload.doctors || [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+
+  if (Array.isArray(doctors) && doctors.length > 0) {
+    var rows = doctors.map(function(doc, idx) {
+      var name = typeof doc === 'string' ? doc : (doc.name || '');
+      return ['doc-' + (idx + 1), name, 'ศัลยศาสตร์', 'Surgical Staff', '', 'ประจำการ', new Date().toISOString()];
+    });
+    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  return { success: true, count: doctors.length };
+}
+
+/**
+ * Movement Records (รับใหม่ ย้ายเข้า ย้ายออก เสียชีวิต)
+ */
+function handleGetMovementRecords() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.MOVEMENT_RECORDS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, records: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var records = [];
+  for (var i = 0; i < data.length; i++) {
+    records.push({
+      id: data[i][0],
+      shiftId: data[i][1],
+      date: data[i][2],
+      shiftType: data[i][3],
+      type: data[i][4],
+      patientName: data[i][5],
+      hn: data[i][6],
+      bedNumber: data[i][7],
+      wardOrHospital: data[i][8],
+      time: data[i][9],
+      details: data[i][10],
+      createdAt: data[i][11]
+    });
+  }
+  return { success: true, records: records };
+}
+
+function handleSaveMovementRecord(payload) {
+  var record = payload.record || payload;
+  var sheet = getOrCreateSheet(SHEET_NAMES.MOVEMENT_RECORDS);
+  var row = [
+    record.id || ('mov-' + Date.now()), record.shiftId || '', record.date || '', record.shiftType || '',
+    record.type || '', record.patientName || '', record.hn || '', record.bedNumber || '',
+    record.wardOrHospital || '', record.time || '', record.details || '', new Date().toISOString()
+  ];
+  sheet.appendRow(row);
+  return { success: true, record: record };
+}
+
+/**
+ * Consultations
+ */
+function handleGetConsultations() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.CONSULTATIONS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, consultations: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var list = [];
+  for (var i = 0; i < data.length; i++) {
+    list.push({
+      id: data[i][0],
+      shiftId: data[i][1],
+      date: data[i][2],
+      shiftType: data[i][3],
+      department: data[i][4],
+      doctorName: data[i][5],
+      patientName: data[i][6],
+      hn: data[i][7],
+      reason: data[i][8],
+      status: data[i][9],
+      urgent: Boolean(data[i][10]),
+      createdAt: data[i][11]
+    });
+  }
+  return { success: true, consultations: list };
+}
+
+function handleSaveConsultation(payload) {
+  var item = payload.consultation || payload;
+  var sheet = getOrCreateSheet(SHEET_NAMES.CONSULTATIONS);
+  var row = [
+    item.id || ('con-' + Date.now()), item.shiftId || '', item.date || '', item.shiftType || '',
+    item.department || '', item.doctorName || '', item.patientName || '', item.hn || '',
+    item.reason || '', item.status || 'รอตรวจ', Boolean(item.urgent), new Date().toISOString()
+  ];
+  sheet.appendRow(row);
+  return { success: true, consultation: item };
+}
+
+/**
+ * Incidents & Risk Log
+ */
+function handleGetIncidents() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.INCIDENTS_RISK_LOG);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, incidents: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var list = [];
+  for (var i = 0; i < data.length; i++) {
+    list.push({
+      id: data[i][0],
+      shiftId: data[i][1],
+      date: data[i][2],
+      shiftType: data[i][3],
+      category: data[i][4],
+      severityLevel: data[i][5],
+      description: data[i][6],
+      patientName: data[i][7],
+      hn: data[i][8],
+      immediateAction: data[i][9],
+      reportedBy: data[i][10],
+      createdAt: data[i][11]
+    });
+  }
+  return { success: true, incidents: list };
+}
+
+function handleSaveIncident(payload) {
+  var item = payload.incident || payload;
+  var sheet = getOrCreateSheet(SHEET_NAMES.INCIDENTS_RISK_LOG);
+  var row = [
+    item.id || ('inc-' + Date.now()), item.shiftId || '', item.date || '', item.shiftType || '',
+    item.category || '', item.severityLevel || '', item.description || '', item.patientName || '',
+    item.hn || '', item.immediateAction || '', item.reportedBy || '', new Date().toISOString()
+  ];
+  sheet.appendRow(row);
+  return { success: true, incident: item };
+}
+
+/**
+ * Valuable Items
+ */
+function handleGetValuableItems() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, valuableItems: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  var list = [];
+  for (var i = 0; i < data.length; i++) {
+    if (!data[i][0]) continue;
+    list.push({
+      id: data[i][0],
+      patientName: data[i][1],
+      hn: data[i][2],
+      bedNumber: data[i][3],
+      itemDescription: data[i][4],
+      custodian: data[i][5],
+      receiver: data[i][6],
+      status: data[i][7],
+      dateAdded: data[i][8],
+      notes: data[i][9],
+      shiftId: data[i][10]
+    });
+  }
+  return { success: true, valuableItems: list };
+}
+
+function handleSaveValuableItem(payload) {
+  var item = payload.item || payload;
+  if (!item || !item.id) return { success: false, error: 'Missing valuable item id' };
+
+  var sheet = getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS);
+  var row = [
+    item.id, item.patientName || '', item.hn || '', item.bedNumber || '',
+    item.itemDescription || '', item.custodian || '', item.receiver || '',
+    item.status || 'safe_kept', item.dateAdded || '', item.notes || '',
+    item.shiftId || '', item.createdAt || new Date().toISOString(), new Date().toISOString()
+  ];
+
+  var lastRow = sheet.getLastRow();
+  var foundRow = -1;
+  if (lastRow >= 2) {
+    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(item.id)) { foundRow = i + 2; break; }
+    }
+  }
+
+  if (foundRow > 0) sheet.getRange(foundRow, 1, 1, row.length).setValues([row]);
+  else sheet.appendRow(row);
+
+  return { success: true, item: item };
+}
+
+function handleDeleteValuableItem(payload) {
+  var id = payload.id;
+  if (!id) return { success: false, error: 'Missing item id' };
+
+  var sheet = getOrCreateSheet(SHEET_NAMES.VALUABLE_ITEMS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true };
+
+  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      sheet.deleteRow(i + 2);
+      break;
+    }
+  }
+  return { success: true };
+}
+
+/**
+ * Settings
+ */
+function handleGetSettings() {
+  var sheet = getOrCreateSheet(SHEET_NAMES.SETTINGS, ['key', 'value', 'updatedAt']);
+  var settings = {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0]) settings[data[i][0]] = data[i][1];
+    }
+  }
+  return { success: true, settings: settings };
+}
+
+function handleSaveSettings(settings) {
+  var sheet = getOrCreateSheet(SHEET_NAMES.SETTINGS, ['key', 'value', 'updatedAt']);
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
+  var keys = Object.keys(settings || {});
+  if (keys.length === 0) return { success: true };
+  var rows = keys.map(function(k) { return [k, String(settings[k]), new Date().toISOString()]; });
+  sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+  return { success: true };
+}
+
+/**
+ * Save Active State Snapshot
+ */
+function handleSaveState(payload) {
+  var currentShift = payload.currentShift || payload.activeShift;
+  if (currentShift) {
+    var summarySheet = getOrCreateSheet(SHEET_NAMES.SUMMARY_CURRENT_SHIFT);
+    var stats = currentShift.stats || {};
+    var row = [
+      currentShift.id || '', currentShift.date || '', currentShift.shiftType || '', currentShift.inchargeName || '',
+      currentShift.previousShiftInfo || '', Boolean(currentShift.isActive),
+      Number(stats.carriedOver) || 0, Number(stats.currentRemaining) || 0, Number(stats.ventilatorCount) || 0,
+      Number(stats.category5Count) || 0, Number(stats.category4Count) || 0, Number(stats.oxygenCount) || 0, Number(stats.postOpCount) || 0,
+      currentShift.createdAt || new Date().toISOString(), new Date().toISOString(), JSON.stringify(currentShift)
+    ];
+
+    var lastRow = summarySheet.getLastRow();
+    if (lastRow >= 2) summarySheet.getRange(2, 1, lastRow - 1, summarySheet.getLastColumn()).clearContent();
+    summarySheet.getRange(2, 1, 1, row.length).setValues([row]);
+  }
+
+  if (Array.isArray(payload.handoverItems)) handleSaveHandovers(payload.handoverItems);
+  if (Array.isArray(payload.pendingCharts)) handleSavePendingCharts(payload.pendingCharts);
+
+  return { success: true, message: 'Ward state saved to Google Sheets', updatedAt: new Date().toISOString() };
+}
+
+/**
+ * ลบข้อมูลที่ค้างเก่าทั้งหมด reset ข้อมูล เพื่อเริ่มต้นใหม่
+ * เคลียร์แถวข้อมูลทิ้งทั้งหมด โดยคงหัวตารางมาตรฐานไว้ครบถ้วน
+ */
+function handleResetAllData() {
+  var sheetsToClear = [
+    SHEET_NAMES.SUMMARY_CURRENT_SHIFT,
+    SHEET_NAMES.HANDOVERS,
+    SHEET_NAMES.PENDING_CHARTS,
+    SHEET_NAMES.MOVEMENT_RECORDS,
+    SHEET_NAMES.CONSULTATIONS,
+    SHEET_NAMES.INCIDENTS_RISK_LOG,
+    SHEET_NAMES.EQUIPMENT_LOG,
+    SHEET_NAMES.EQUIPMENT_WEAN_LOG,
+    SHEET_NAMES.VALUABLE_ITEMS
+  ];
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  for (var i = 0; i < sheetsToClear.length; i++) {
+    var sheet = ss.getSheetByName(sheetsToClear[i]);
+    if (sheet && sheet.getLastRow() >= 2) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+    }
+  }
+
+  // Ensure standard sheets are initialized
+  handleInitSheets();
+
   return {
     success: true,
-    settings: settings
+    message: 'ลบข้อมูลที่ค้างเก่าทั้งหมด และรีเซ็ตข้อมูลเริ่มต้นใหม่เรียบร้อยแล้ว ไม่มีข้อมูลปลอมและไม่มีบันทึกเดิมค้าง'
   };
 }

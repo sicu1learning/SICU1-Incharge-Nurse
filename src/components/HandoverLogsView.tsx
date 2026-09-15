@@ -30,6 +30,7 @@ import {
   getThaiMonthYear,
   parseThaiDate,
   getShiftRank,
+  normalizeThaiDate,
 } from '../utils/shiftUtils';
 import { EditShiftModal } from './EditShiftModal';
 import { MonthlyReportModal } from './modals/MonthlyReportModal';
@@ -1369,7 +1370,7 @@ export const HandoverLogsView: React.FC<HandoverLogsViewProps> = ({
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <h4 className="text-sm font-bold text-slate-800 font-['Prompt',sans-serif]">
-                              {shift.date} · {shift.shiftType}
+                              {normalizeThaiDate(shift.date)} · {shift.shiftType}
                             </h4>
                             <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-100 text-teal-800">
                               คงพยาบาล {remaining}
@@ -1448,7 +1449,7 @@ export const HandoverLogsView: React.FC<HandoverLogsViewProps> = ({
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base md:text-lg font-bold text-slate-800 font-['Prompt',sans-serif]">
-                      รายงานส่งเวร: {selectedShift.date} · {selectedShift.shiftType}
+                      รายงานส่งเวร: {normalizeThaiDate(selectedShift.date)} · {selectedShift.shiftType}
                     </h3>
                     {(selectedShift.id === currentShift.id || selectedShift.isActive) && (
                       <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800 border border-teal-300 inline-flex items-center gap-1">

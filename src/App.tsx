@@ -39,6 +39,7 @@ import {
   GasConnectionStatus,
   getCustomGasUrl,
 } from './services/googleSheets';
+import { normalizeThaiDate, getCurrentThaiDateAndShift } from './utils/shiftUtils';
 import { AlertCircle, FileSpreadsheet, RefreshCw, Loader2, ShieldCheck } from 'lucide-react';
 
 const EMPTY_PATIENT_STATS: PatientStats = {
@@ -433,13 +434,15 @@ export default function App() {
   };
 
   // Fallback safe shift representation when waiting for Google Sheets initial load
-  const displayShift: ShiftInfo = currentShift || {
-    id: 'loading-shift',
-    date: new Date().toLocaleDateString('th-TH'),
-    shiftType: 'เวรเช้า',
-    inchargeName: 'กำลังโหลดข้อมูล...',
-    stats: patientStats,
-  };
+  const displayShift: ShiftInfo = currentShift
+    ? { ...currentShift, date: normalizeThaiDate(currentShift.date) }
+    : {
+        id: 'loading-shift',
+        date: getCurrentThaiDateAndShift().date,
+        shiftType: 'เวรเช้า',
+        inchargeName: 'กำลังโหลดข้อมูล...',
+        stats: patientStats,
+      };
 
   return (
     <div className="min-h-screen bg-[#eef2f6] text-slate-800 flex flex-col font-['Prompt',sans-serif]">
@@ -472,7 +475,10 @@ export default function App() {
                   ไม่สามารถโหลดข้อมูลจาก Google Sheets ได้
                 </h4>
                 <p className="text-xs text-rose-800/90 mt-0.5">
-                  {errorMessage} (ระบบปฏิบัติตามคำสั่ง: ห้ามใช้ mock data โดยเด็ดขาด)
+                  {typeof errorMessage === 'string' && errorMessage !== '[object Object]'
+                    ? errorMessage
+                    : 'ไม่สามารถเชื่อมต่อ Google Apps Script ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือ URL'}{' '}
+                  (ระบบปฏิบัติตามคำสั่ง: ห้ามใช้ mock data โดยเด็ดขาด)
                 </p>
               </div>
             </div>

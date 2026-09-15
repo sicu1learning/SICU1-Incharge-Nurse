@@ -15,6 +15,10 @@ import {
   ArrowRight,
   ShieldCheck,
   ServerOff,
+  RotateCcw,
+  Trash2,
+  Layers,
+  Table,
 } from 'lucide-react';
 import {
   subscribeGasStatus,
@@ -24,7 +28,7 @@ import {
   testGasConnection,
   getStoredSpreadsheetInfo,
 } from '../services/googleSheets';
-import { refreshFromGoogleSheets } from '../services/wardDataService';
+import { refreshFromGoogleSheets, resetAllWardData } from '../services/wardDataService';
 
 interface GoogleAppsScriptModalProps {
   isOpen: boolean;
@@ -39,6 +43,7 @@ export const GoogleAppsScriptModal: React.FC<GoogleAppsScriptModalProps> = ({ is
   });
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [testResult, setTestResult] = useState<{ success?: boolean; message?: string } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
   const [activeTab, setActiveTab] = useState<'settings' | 'instructions' | 'code'>('settings');
@@ -56,23 +61,23 @@ export const GoogleAppsScriptModal: React.FC<GoogleAppsScriptModalProps> = ({ is
   if (!isOpen) return null;
 
   const handleSaveAndTest = async () => {
-    if (!gasUrl.trim()) {
-      setTestResult({ success: false, message: 'กรุณากรอก Google Apps Script Web App URL' });
-      return;
-    }
-    setStoredGasUrl(gasUrl.trim());
     setIsTesting(true);
     setTestResult(null);
 
-    const res = await testGasConnection(gasUrl.trim());
+    const target = gasUrl.trim();
+    if (target) {
+      setStoredGasUrl(target);
+    }
+
+    const res = await testGasConnection(target || undefined);
     setIsTesting(false);
     if (res.success) {
       setTestResult({
         success: true,
-        message: `เชื่อมต่อสำเร็จ: ${res.spreadsheetName || 'Google Sheets'}`,
+        message: `เชื่อมต่อสำเร็จ: ${res.spreadsheetName || 'Google Sheets Backend'}`,
       });
       // Trigger initial pull
-      refreshFromGoogleSheets();
+      refreshFromGoogleSheets(true);
     } else {
       setTestResult({
         success: false,
@@ -83,12 +88,34 @@ export const GoogleAppsScriptModal: React.FC<GoogleAppsScriptModalProps> = ({ is
 
   const handleManualSync = async () => {
     setIsSyncing(true);
-    const res = await refreshFromGoogleSheets();
+    const res = await refreshFromGoogleSheets(true);
     setIsSyncing(false);
     if (res.success) {
       setTestResult({ success: true, message: 'ซิงค์ข้อมูลจาก Google Sheets สำเร็จแล้ว' });
     } else {
       setTestResult({ success: false, message: res.error || 'เกิดข้อผิดพลาดในการซิงค์ข้อมูล' });
+    }
+  };
+
+  const handleResetData = async () => {
+    const confirmed = window.confirm(
+      'ยืนยันการลบข้อมูลที่ค้างเก่าทั้งหมด และรีเซ็ตข้อมูลเพื่อเริ่มต้นใหม่?\n\n- ล้างเวรปัจจุบันให้เป็นศูนย์\n- เคลียร์เรื่องส่งต่อเวรและชาร์ตค้างทั้งหมดใน Google Sheets\n- เริ่มต้นใหม่โดยไม่มีข้อมูลปลอมและไม่มีบันทึกเดิมค้าง'
+    );
+    if (!confirmed) return;
+
+    setIsResetting(true);
+    const res = await resetAllWardData();
+    setIsResetting(false);
+    if (res.success) {
+      setTestResult({
+        success: true,
+        message: 'ลบข้อมูลที่ค้างเก่าทั้งหมด และรีเซ็ตข้อมูลเริ่มต้นใหม่เรียบร้อยแล้ว (ไม่มีข้อมูลปลอมและไม่มีบันทึกค้าง)',
+      });
+    } else {
+      setTestResult({
+        success: false,
+        message: res.error || 'เกิดข้อผิดพลาดในการรีเซ็ตข้อมูล',
+      });
     }
   };
 
@@ -621,16 +648,29 @@ function handleSaveSettings(settings) {
               )}
 
               {/* Action Buttons */}
-              <div className="pt-2 flex items-center justify-between flex-wrap gap-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={handleManualSync}
-                  disabled={isSyncing || status.state !== 'connected'}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>ดึงข้อมูลล่าสุดจาก Sheets เดี๋ยวนี้</span>
-                </button>
+              <div className="pt-3 flex items-center justify-between flex-wrap gap-3 border-t border-slate-100">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleManualSync}
+                    disabled={isSyncing || isResetting || status.state !== 'connected'}
+                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>ดึงข้อมูลล่าสุดจาก Sheets</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetData}
+                    disabled={isResetting || isSyncing || status.state !== 'connected'}
+                    className="px-4 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-sm"
+                    title="ลบข้อมูลที่ค้างเก่าทั้งหมด เพื่อเริ่มต้นใหม่ ปราศจากข้อมูลปลอมหรือบันทึกเดิมค้าง"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin' : ''}`} />
+                    <span>{isResetting ? 'กำลังรีเซ็ตข้อมูล...' : 'รีเซ็ตข้อมูลเริ่มต้นใหม่ (Clean Reset)'}</span>
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-3 text-xs text-slate-500">
                   <span className="flex items-center gap-1">
@@ -687,8 +727,58 @@ function handleSaveSettings(settings) {
                 </li>
               </ol>
 
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px]">
-                💡 <strong>หมายเหตุ:</strong> ระบบจะสร้างแท็บชีต <code className="font-mono">Active_Shift</code>, <code className="font-mono">Shifts_History</code>, <code className="font-mono">Handover_Items</code>, <code className="font-mono">Pending_Charts</code> และ <code className="font-mono">Settings</code> พร้อมหัวตารางให้อัตโนมัติทันทีที่มีการบันทึกครั้งแรก
+              {/* 10 Standard Sheets Architecture Reference */}
+              <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="flex items-center gap-2 font-bold text-slate-800 text-xs">
+                  <Layers className="w-4 h-4 text-teal-700" />
+                  <span>โครงสร้าง 10 Sheet มาตรฐานใน Google Spreadsheet (สร้างอัตโนมัติพร้อมหัวตาราง)</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">1. Summary_CurrentShift</span>
+                    <p className="text-slate-600 mt-0.5">ข้อมูลสรุปสถานะเวรปัจจุบัน ยอดผู้ป่วย สถิติ และ Snapshot วอร์ด</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">2. staff</span>
+                    <p className="text-slate-600 mt-0.5">รายชื่อพยาบาลและเจ้าหน้าที่ประจำวอร์ด</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">3. Doctor staff</span>
+                    <p className="text-slate-600 mt-0.5">รายชื่อแพทย์เจ้าของไข้</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">4. Shifts_History</span>
+                    <p className="text-slate-600 mt-0.5">บันทึกประวัติเวรทั้งหมดอย่างละเอียด พร้อมคอลัมน์ JSON สำรอง</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">5. Handovers</span>
+                    <p className="text-slate-600 mt-0.5">รายการเรื่องส่งต่อระหว่างเวรที่กำลังดำเนินการ (Active Handovers)</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">6. Pending_Charts</span>
+                    <p className="text-slate-600 mt-0.5">รายการชาร์ตค้าง สถานะ และจำนวนวันค้าง</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">7. Equipment_Log / Wean</span>
+                    <p className="text-slate-600 mt-0.5">บันทึกการใช้อุปกรณ์และการหย่าเครื่องช่วยหายใจ</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">8. Movement_Records</span>
+                    <p className="text-slate-600 mt-0.5">รายการรับใหม่ ย้ายเข้า ย้ายออก เสียชีวิต</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">9. Consultations</span>
+                    <p className="text-slate-600 mt-0.5">รายการ Consult แพทย์เฉพาะทาง</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200">
+                    <span className="font-mono font-bold text-teal-800">10. Incidents_Risk_Log</span>
+                    <p className="text-slate-600 mt-0.5">รายการอุบัติการณ์และความเสี่ยงทางคลินิก</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-teal-950 text-[11px]">
+                💡 <strong>หมายเหตุ:</strong> ระบบมีฟังก์ชัน <code className="font-mono font-bold">getOrCreateSheet()</code> ที่จะตรวจสอบและสร้างชีตพร้อมหัวตารางภาษาไทย/อังกฤษตามมาตรฐานอัตโนมัติหากยังไม่มีชีตนั้นๆ อยู่
               </div>
             </div>
           )}

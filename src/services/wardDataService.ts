@@ -6,6 +6,7 @@ import {
   PendingChart,
   ValuableItem,
 } from '../types';
+import { normalizeThaiDate } from '../utils/shiftUtils';
 import {
   getAllData,
   saveShift,
@@ -21,9 +22,11 @@ import {
   deleteValuableItem as deleteValuableItemApi,
   returnValuableItem as returnValuableItemApi,
   saveNurses,
+  resetWardData as resetWardDataApi,
   getGasConnectionStatus,
   subscribeGasStatus,
   GasConnectionStatus,
+  extractErrorMessage,
 } from './googleSheets';
 
 export const DEFAULT_NURSES: string[] = [
@@ -115,36 +118,46 @@ function notifyStateSubscribers() {
 }
 
 /**
- * Ensures equipmentWeanData is only present on 'เวรบ่าย' (Afternoon shift)
+ * Ensures shift date is formatted as DD/MM/YYYY and equipmentWeanData is only present on 'เวรบ่าย'
  */
 export function sanitizeShiftEquipmentData(shift: ShiftInfo): ShiftInfo {
   if (!shift) return shift;
-  const isNotAfternoon = shift.shiftType !== 'เวรบ่าย';
+  const copy = { ...shift };
+  if (copy.date) {
+    copy.date = normalizeThaiDate(copy.date);
+  }
+  const isNotAfternoon = copy.shiftType !== 'เวรบ่าย';
 
-  if (isNotAfternoon && shift.equipmentWeanData) {
-    const copy = { ...shift };
+  if (isNotAfternoon && copy.equipmentWeanData) {
     delete copy.equipmentWeanData;
     if (copy.stats) {
       copy.stats = { ...copy.stats, ventilatorCount: 0 };
     }
-    return copy;
   }
-  return shift;
+  return copy;
 }
 
 export function sanitizeShiftsList(shifts: ShiftInfo[]): { shifts: ShiftInfo[]; changed: boolean } {
   let changed = false;
   const sanitized = (shifts || []).map((s) => {
+    const origDate = s.date;
+    const cleanDate = normalizeThaiDate(s.date);
+    if (origDate !== cleanDate) {
+      changed = true;
+    }
     const isNotAfternoon = s.shiftType !== 'เวรบ่าย';
 
     if (isNotAfternoon && s.equipmentWeanData) {
       changed = true;
-      const copy = { ...s };
+      const copy = { ...s, date: cleanDate };
       delete copy.equipmentWeanData;
       if (copy.stats) {
         copy.stats = { ...copy.stats, ventilatorCount: 0 };
       }
       return copy;
+    }
+    if (origDate !== cleanDate) {
+      return { ...s, date: cleanDate };
     }
     return s;
   });
@@ -154,11 +167,14 @@ export function sanitizeShiftsList(shifts: ShiftInfo[]): { shifts: ShiftInfo[]; 
 
 let activeRefreshPromise: Promise<{ success: boolean; error?: string }> | null = null;
 
+let lastFetchSuccessTime = 0;
+let lastFetchErrorTime = 0;
+
 /**
  * Pull latest data from Google Sheets via Google Apps Script Web API.
  * STRICT RULE: If Google Sheets fails, sets clear error. NEVER mocks data!
  */
-export async function refreshFromGoogleSheets(): Promise<{
+export async function refreshFromGoogleSheets(force: boolean = false): Promise<{
   success: boolean;
   error?: string;
 }> {
@@ -166,15 +182,33 @@ export async function refreshFromGoogleSheets(): Promise<{
     return activeRefreshPromise;
   }
 
+  const now = Date.now();
+  // Prevent spamming Google Apps Script on failure (15s backoff for background calls)
+  if (!force && lastFetchErrorTime > 0 && now - lastFetchErrorTime < 15000) {
+    return { success: false, error: cachedWardState.error };
+  }
+
+  // Background cooldown: don't auto-fetch if fetched within last 10 seconds
+  if (!force && lastFetchSuccessTime > 0 && now - lastFetchSuccessTime < 10000) {
+    return { success: true };
+  }
+
   activeRefreshPromise = (async () => {
     try {
       const data = await getAllData();
+      lastFetchSuccessTime = Date.now();
+      lastFetchErrorTime = 0;
 
       const sanitizedActiveShift = data.activeShift
         ? sanitizeShiftEquipmentData(data.activeShift)
         : null;
 
       const { shifts: sanitizedShifts } = sanitizeShiftsList(data.shifts || []);
+
+      const sanitizedPendingCharts = (data.pendingCharts || []).map((chart: any) => ({
+        ...chart,
+        dateAdded: chart.dateAdded ? normalizeThaiDate(chart.dateAdded) : chart.dateAdded,
+      }));
 
       cachedWardState = {
         currentShift: sanitizedActiveShift,
@@ -183,7 +217,7 @@ export async function refreshFromGoogleSheets(): Promise<{
           (sanitizedActiveShift ? sanitizedActiveShift.stats : null),
         handoverItems: data.handoverItems || [],
         handoverHistory: data.handoverHistory || [],
-        pendingCharts: data.pendingCharts || [],
+        pendingCharts: sanitizedPendingCharts,
         valuableItems: data.valuableItems || [],
         shiftsHistory: sanitizedShifts,
         nurseList: data.nurses && data.nurses.length > 0 ? data.nurses : cachedWardState.nurseList,
@@ -196,8 +230,9 @@ export async function refreshFromGoogleSheets(): Promise<{
       notifyStateSubscribers();
       return { success: true };
     } catch (err: any) {
-      const errorMsg = err?.message || 'ไม่สามารถโหลดข้อมูลจาก Google Sheets ได้';
-      console.error('Google Sheets fetch failed:', errorMsg);
+      lastFetchErrorTime = Date.now();
+      const errorMsg = extractErrorMessage(err);
+      console.warn('Google Sheets fetch notice:', errorMsg);
 
       cachedWardState = {
         ...cachedWardState,
@@ -218,38 +253,43 @@ export async function refreshFromGoogleSheets(): Promise<{
 /**
  * Initialize Ward Data from Google Sheets
  * - Pulls live data immediately on mount
- * - Sets up periodic background polling (every 20s) for real-time multi-device sync
+ * - Sets up periodic background polling (every 30s) for real-time multi-device sync
  * - Reloads automatically when browser window gains focus
  */
 export function initializeWardData() {
   if (isInitialized) return;
   isInitialized = true;
 
-  refreshFromGoogleSheets().then((res) => {
+  // Initial pull
+  refreshFromGoogleSheets(true).then((res) => {
     if (!res.success) {
+      // Retry once after 10s backoff if initial pull had a transient issue
       setTimeout(() => {
-        refreshFromGoogleSheets();
-      }, 2500);
+        refreshFromGoogleSheets(false);
+      }, 10000);
     }
   });
 
   if (pollIntervalTimer) clearInterval(pollIntervalTimer);
   pollIntervalTimer = setInterval(() => {
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      refreshFromGoogleSheets();
+      refreshFromGoogleSheets(false);
     }
-  }, 20000);
+  }, 30000);
 
   if (typeof window !== 'undefined') {
-    window.addEventListener('visibilitychange', () => {
+    let focusDebounce: any = null;
+    const handleReactivation = () => {
       if (document.visibilityState === 'visible') {
-        refreshFromGoogleSheets();
+        clearTimeout(focusDebounce);
+        focusDebounce = setTimeout(() => {
+          refreshFromGoogleSheets(false);
+        }, 1500);
       }
-    });
+    };
 
-    window.addEventListener('focus', () => {
-      refreshFromGoogleSheets();
-    });
+    window.addEventListener('visibilitychange', handleReactivation);
+    window.addEventListener('focus', handleReactivation);
   }
 }
 
@@ -515,3 +555,39 @@ export async function syncNurseListToCloud(nurses: string[]) {
 
   return saveNurses(nurses);
 }
+
+/**
+ * Reset all ward data to fresh state
+ * Clears active shift, handovers, pending charts, and wipes test/mock records
+ */
+export async function resetAllWardData() {
+  cachedWardState = {
+    ...cachedWardState,
+    isLoading: true,
+  };
+  notifyStateSubscribers();
+
+  const res = await resetWardDataApi();
+  if (res.success) {
+    cachedWardState = {
+      ...cachedWardState,
+      currentShift: null,
+      patientStats: null,
+      handoverItems: [],
+      pendingCharts: [],
+      valuableItems: [],
+      isLoading: false,
+      error: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+  } else {
+    cachedWardState = {
+      ...cachedWardState,
+      isLoading: false,
+      error: res.error,
+    };
+  }
+  notifyStateSubscribers();
+  return res;
+}
+
